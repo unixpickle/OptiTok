@@ -5,7 +5,6 @@ import Testing
 @Test func testPretokenize() async throws {
   let t = Tokenizer(vocab: [[]], pretokenizer: Tokenizer.NanochatPretokenizer)
   let tokens = t.pretokenize(text: "Hello, world! This is\na test.")
-  print(tokens.map { String(decoding: $0, as: UTF8.self) })
   #expect(
     tokens
       == [
