@@ -53,7 +53,7 @@ public struct Graph: Codable {
     var startEdges = [Edge]()
     var colorCount = [ColorID: Int]()
     for (wordID, word) in words.enumerated() {
-      for i in 0..<word.bytes.count {
+      for i in word.bytes.indices {
         for j in (i + 1)...min(i + maxColorLen, word.bytes.count) {
           let colorBytes = [UInt8](word.bytes[i..<j])
           let color = lookupColor(bytes: colorBytes)
@@ -84,12 +84,12 @@ public struct Graph: Codable {
       }
     }
 
-    wordToEdges = (0..<words.count).map { _ in [] }
+    wordToEdges = words.map { _ in [] }
     for (edgeID, edge) in edges.enumerated() {
       wordToEdges[edge.word].insert(edgeID)
     }
 
-    overlap = (0..<edges.count).map { _ in [] }
+    overlap = edges.map { _ in [] }
     for wordEdges in wordToEdges {
       var posToEdges = [Int: Set<EdgeID>]()
       for edgeID in wordEdges {
@@ -138,7 +138,7 @@ public struct Graph: Codable {
             } else {
               .middle
             }
-          return (pos: pos, incoming: posToIncoming[idx]!, outgoing: posToOutgoing[idx]!)
+          return (pos: pos, incoming: posToIncoming[idx, default: []], outgoing: posToOutgoing[idx, default: []])
         }
       })
   }

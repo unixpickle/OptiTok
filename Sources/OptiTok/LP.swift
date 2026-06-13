@@ -1,22 +1,22 @@
 /// An GraphLP is a linear program defined over a graph.
-public struct GraphLP {
+public struct GraphLP: Codable {
 
-  public struct Vector {
+  public struct Vector: Codable {
     public var edges: [Graph.EdgeID: Double]
     public var colors: [Graph.ColorID: Double]
 
     public static var empty: Vector { Vector(edges: .init(), colors: .init()) }
 
     public func dot(_ v: Vector) -> Double {
-      let edgeDot = edges.map { (k, x) in x * v.edges[k, default: 0.0] }.reduce(+)
-      let colorDot = colors.map { (k, x) in x * v.colors[k, default: 0.0] }.reduce(+)
+      let edgeDot = edges.map { (k, x) in x * v.edges[k, default: 0.0] }.reduce(0.0, +)
+      let colorDot = colors.map { (k, x) in x * v.colors[k, default: 0.0] }.reduce(0.0, +)
       return edgeDot + colorDot
     }
   }
 
   // A Constraint is a single row of the linear program, defined as coefficients
   // over edge and color variables, as well as an upper bound for the combination.
-  public struct Constraint {
+  public struct Constraint: Codable {
     public var coeffs: Vector
     public var upperBound: Double?
     public var lowerBound: Double?
@@ -24,13 +24,13 @@ public struct GraphLP {
     public init(coeffs: Vector, upperBound: Double) {
       self.coeffs = coeffs
       self.upperBound = upperBound
-      self.lowerBound = 0
+      self.lowerBound = nil
     }
 
     public init(coeffs: Vector, lowerBound: Double) {
       self.coeffs = coeffs
       self.lowerBound = lowerBound
-      self.upperBound = 0
+      self.upperBound = nil
     }
 
     public init(coeffs: Vector, lowerBound: Double, upperBound: Double) {
@@ -41,7 +41,7 @@ public struct GraphLP {
   }
 
   // Limit determines how to limit the vocabulary.
-  public enum Limit {
+  public enum Limit: Codable {
     case vocabSize(Int)
 
     public func constraints(graph: Graph) -> [Constraint] {
@@ -51,7 +51,7 @@ public struct GraphLP {
           Constraint(
             coeffs: Vector(
               edges: .init(),
-              colors: .init(uniqueKeysWithValues: (0..<graph.words.count).map { ($0, Double(1)) })
+              colors: .init(uniqueKeysWithValues: graph.colors.indices.map { ($0, Double(1)) })
             ),
             upperBound: Double(size)
           )
@@ -104,12 +104,12 @@ public struct GraphLP {
       constraints.append(Constraint(coeffs: coeffs, upperBound: 0))
     }
 
-    edgeToCol = Array(0..<graph.edges.count)
-    colorToCol = (0..<graph.colors.count).map { $0 + graph.edges.count }
+    edgeToCol = Array(graph.edges.indices)
+    colorToCol = graph.colors.indices.map { $0 + graph.edges.count }
   }
 
   /// Check computes the objective value and validates the constraints.
-  public check(solution: Vector) -> (maxViolation: Double, objective: Double) {
+  public func check(solution: Vector) -> (maxViolation: Double, objective: Double) {
     var maxViolation = 0.0
     let objValue = solution.dot(objective)
     for c in constraints {
@@ -125,3 +125,5 @@ public struct GraphLP {
   }
 
 }
+
+public typealias LP = GraphLP

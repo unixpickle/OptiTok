@@ -1,0 +1,24 @@
+{
+    "configurations": [
+        {
+            "type": "swift",
+            "request": "launch",
+            "args": [],
+            "cwd": "${workspaceFolder:OptiTokSoPlex}",
+            "name": "Debug SolveLoop",
+            "target": "SolveLoop",
+            "configuration": "debug",
+            "preLaunchTask": "swift: Build Debug SolveLoop"
+        },
+        {
+            "type": "swift",
+            "request": "launch",
+            "args": [],
+            "cwd": "${workspaceFolder:OptiTokSoPlex}",
+            "name": "Release SolveLoop",
+            "target": "SolveLoop",
+            "configuration": "release",
+            "preLaunchTask": "swift: Build Release SolveLoop"
+        }
+    ]
+}

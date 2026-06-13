@@ -29,7 +29,7 @@ public struct Tokenizer {
   /// Find a shortest-path encoding for the word.
   public func encode(word: [UInt8]) -> [TokenID] {
     var posToOptimal = [0: [TokenID]()]
-    for start in 0..<word.count {
+    for start in word.indices {
       guard let baseTok = posToOptimal[start] else {
         continue
       }
