@@ -68,24 +68,39 @@ public struct GraphLP: Codable {
   public let edgeToCol: [ColID]
   public let colorToCol: [ColID]
 
-  public init(graph: Graph, limit: Limit) {
+  public init(graph: Graph, limit: Limit, forceSingleBytes: Bool = true) {
     self.graph = graph
     constraints = limit.constraints(graph: graph)
     objective = Vector(
       edges: .init(
-        uniqueKeysWithValues: graph.words.enumerated().map { (wordID, word) in
-          return (wordID, Double(word.bytes.count) * word.weight)
+        uniqueKeysWithValues: graph.edges.enumerated().map { (edgeID, edge) in
+          return (edgeID, graph.words[edge.word].weight)
         }),
       colors: .init()
     )
 
+    if forceSingleBytes {
+      for (colorID, color) in graph.colors.enumerated() {
+        if color.count == 1 {
+          constraints.append(
+            Constraint(
+              coeffs: Vector(edges: .init(), colors: [colorID: 1]),
+              lowerBound: 1,
+              upperBound: 1
+            )
+          )
+        }
+      }
+    }
+
     // Add flow constraints for each vertex (midpoint between bytes of a word)
     for (pos, incoming, outgoing) in graph.vertices() {
-      let rhs = switch pos {
+      let rhs =
+        switch pos {
         case .start: -1.0
         case .middle: 0.0
         case .end: 1.0
-      }
+        }
       var coeffs = Vector.empty
       for edge in incoming {
         coeffs.edges[edge] = 1

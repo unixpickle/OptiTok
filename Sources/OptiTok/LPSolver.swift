@@ -234,7 +234,7 @@ public class HiGHSSolver: Codable {
                       numRow,
                       HighsInt(values.count),
                       kHighsMatrixFormatRowwise,
-                      kHighsObjSenseMaximize,
+                      kHighsObjSenseMinimize,
                       0.0,
                       colCostBuffer.baseAddress,
                       colLowerBuffer.baseAddress,

@@ -40,6 +40,7 @@ public struct Graph: Codable {
     var startColors = [[UInt8]]()
     if forceSingleBytes {
       startColors.append(contentsOf: (0...255).map { [UInt8($0)] })
+      colorMap = .init(uniqueKeysWithValues: zip(startColors, startColors.indices))
     }
     func lookupColor(bytes: [UInt8]) -> ColorID {
       if let c = colorMap[bytes] {
@@ -138,7 +139,10 @@ public struct Graph: Codable {
             } else {
               .middle
             }
-          return (pos: pos, incoming: posToIncoming[idx, default: []], outgoing: posToOutgoing[idx, default: []])
+          return (
+            pos: pos, incoming: posToIncoming[idx, default: []],
+            outgoing: posToOutgoing[idx, default: []]
+          )
         }
       })
   }

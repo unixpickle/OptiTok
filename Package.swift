@@ -15,6 +15,12 @@ let package = Package(
         .library(
             name: "OptiTok",
             targets: ["OptiTok"]),
+        .executable(
+            name: "SolveLoop",
+            targets: ["SolveLoop"]),
+    ],
+    dependencies: [
+        .package(url: "https://github.com/apple/swift-argument-parser.git", from: "1.8.1"),
     ],
     targets: [
         // Targets are the basic building blocks of a package, defining a module or a test suite.
@@ -35,6 +41,15 @@ let package = Package(
         .target(
             name: "OptiTok",
             dependencies: ["CHiGHS"],
+            swiftSettings: [
+                .unsafeFlags(["-Xcc", "-I\(highsInclude)", "-Xcc", "-I\(highsNestedInclude)"])
+            ]),
+        .executableTarget(
+            name: "SolveLoop",
+            dependencies: [
+                "OptiTok",
+                .product(name: "ArgumentParser", package: "swift-argument-parser"),
+            ],
             swiftSettings: [
                 .unsafeFlags(["-Xcc", "-I\(highsInclude)", "-Xcc", "-I\(highsNestedInclude)"])
             ]),
