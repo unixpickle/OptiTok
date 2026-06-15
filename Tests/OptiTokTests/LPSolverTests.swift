@@ -3,6 +3,16 @@ import Testing
 
 @testable import OptiTok
 
+@Test func testGraphColorOccurrencesAreWeighted() async throws {
+  let graph = Graph(
+    corpus: [Array("ab".utf8), Array("ab".utf8)],
+    maxColorLen: 2,
+    minColorOccurrences: 2
+  )
+
+  #expect(graph.colors.contains(Array("ab".utf8)))
+}
+
 @Test func testHiGHSSolver() async throws {
   let graph = Graph(
     corpus: [Array("abab".utf8)],

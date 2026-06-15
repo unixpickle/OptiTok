@@ -52,13 +52,13 @@ public struct Graph: Codable {
     }
 
     var startEdges = [Edge]()
-    var colorCount = [ColorID: Int]()
+    var colorCount = [ColorID: Double]()
     for (wordID, word) in words.enumerated() {
       for i in word.bytes.indices {
         for j in (i + 1)...min(i + maxColorLen, word.bytes.count) {
           let colorBytes = [UInt8](word.bytes[i..<j])
           let color = lookupColor(bytes: colorBytes)
-          colorCount[color, default: 0] += 1
+          colorCount[color, default: 0] += word.weight
           startEdges.append(Edge(word: wordID, start: i, length: j - i, color: color))
         }
       }
@@ -66,11 +66,11 @@ public struct Graph: Codable {
 
     var filteredColorIDMap = [ColorID: ColorID]()
     colors = [[UInt8]]()
-    for (colorID, count) in colorCount {
-      let colorBytes = startColors[colorID]
+    for (colorID, colorBytes) in startColors.enumerated() {
+      let count = colorCount[colorID, default: 0]
       // Don't skip single bytes, because then there will be nothing to support
       // the words where these undercounted single bytes occur.
-      if colorBytes.count > 1 && count < minColorOccurrences {
+      if colorBytes.count > 1 && count < Double(minColorOccurrences) {
         continue
       }
       filteredColorIDMap[colorID] = colors.count

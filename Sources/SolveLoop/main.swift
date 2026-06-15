@@ -46,7 +46,7 @@ struct SolveLoop: ParsableCommand {
   var maxColorLen = 16
 
   @Option(help: "Minimum occurrences for multi-byte colors.")
-  var minColorOccurrences = 2
+  var minColorOccurrences = 5
 
   @Option(help: "Force all single-byte colors into the graph and LP.")
   var forceSingleBytes = true
@@ -89,7 +89,7 @@ struct SolveLoop: ParsableCommand {
     try FileManager.default.createDirectory(at: updatesURL, withIntermediateDirectories: true)
 
     print("Loading book: \(bookPath)")
-    let text = try String(contentsOfFile: bookPath, encoding: .utf8)
+    let text = try Self.readText(bookPath)
     let corpus = Tokenizer(vocab: []).pretokenize(text: text)
     print("Pretokenized \(corpus.count) words.")
 
@@ -127,6 +127,9 @@ struct SolveLoop: ParsableCommand {
     try Self.writeState(solution, to: updatesURL.appendingPathComponent("solution.plist"))
     try Self.writeState(highsSolver, to: updatesURL.appendingPathComponent("solver.plist"))
 
+    let tok = Tokenizer.rounding(solution: solution, graph: graph, vocabLimit: vocabSize)
+    let tokCount = corpus.map { tok.encode(word: $0).count }.reduce(0, +)
+
     let check = lp.check(solution: solution)
     let summary = Summary(
       bookPath: bookPath,
@@ -155,6 +158,7 @@ struct SolveLoop: ParsableCommand {
     try Self.writeState(summary, to: updatesURL.appendingPathComponent("summary.plist"))
 
     print("Solved. Objective: \(check.objective), max violation: \(check.maxViolation)")
+    print("Rounded tokenizer: \(tokCount)")
     print("Saved solution and solver checkpoint to \(updatesURL.path)")
   }
 
@@ -162,5 +166,18 @@ struct SolveLoop: ParsableCommand {
     let encoder = PropertyListEncoder()
     let data = try encoder.encode(value)
     try data.write(to: url, options: .atomic)
+  }
+
+  private static func readText(_ path: String) throws -> String {
+    let data = try Data(contentsOf: URL(fileURLWithPath: path))
+    guard var text = String(data: data, encoding: .utf8) else {
+      throw CocoaError(.fileReadInapplicableStringEncoding)
+    }
+    if data.starts(with: [0xef, 0xbb, 0xbf]) {
+      text = "\u{feff}" + text
+    }
+    return text
+      .replacingOccurrences(of: "\r\n", with: "\n")
+      .replacingOccurrences(of: "\r", with: "\n")
   }
 }

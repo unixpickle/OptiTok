@@ -17,6 +17,22 @@ public struct Tokenizer {
     self.pretokenizer = pretokenizer ?? Self.NanochatPretokenizer
   }
 
+  public static func rounding(
+    solution: LP.Vector,
+    graph: Graph,
+    vocabLimit: Int,
+    pretokenizer: NSRegularExpression? = nil,
+  ) -> Tokenizer {
+    var vocab = [[UInt8]]()
+    for (colorID, weight) in solution.colors.sorted(by: { $0.1 > $1.1 }) {
+      if weight == 0 || vocab.count == vocabLimit {
+        break
+      }
+      vocab.append(graph.colors[colorID])
+    }
+    return Tokenizer(vocab: vocab, pretokenizer: pretokenizer)
+  }
+
   /// Split up the text into words that can be passed to encode().
   public func pretokenize(text: String) -> [[UInt8]] {
     let nsRange = NSRange(text.startIndex..<text.endIndex, in: text)

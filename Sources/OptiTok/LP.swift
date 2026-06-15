@@ -1,5 +1,5 @@
-/// An GraphLP is a linear program defined over a graph.
-public struct GraphLP: Codable {
+/// An LP is a linear program defined over a graph.
+public struct LP: Codable {
 
   public struct Vector: Codable {
     public var edges: [Graph.EdgeID: Double]
@@ -140,5 +140,3 @@ public struct GraphLP: Codable {
   }
 
 }
-
-public typealias LP = GraphLP
