@@ -17,6 +17,7 @@ public struct Graph: Codable {
   }
 
   public var colors: [[UInt8]]
+  public var colorWeights: [Double]
   public var words: [Word]
   public var edges: [Edge]
 
@@ -85,6 +86,8 @@ public struct Graph: Codable {
       }
     }
 
+    colorWeights = colors.indices.map { colorCount[$0, default: 0] }
+
     wordToEdges = words.map { _ in [] }
     for (edgeID, edge) in edges.enumerated() {
       wordToEdges[edge.word].insert(edgeID)
@@ -140,11 +143,40 @@ public struct Graph: Codable {
               .middle
             }
           return (
-            pos: pos, incoming: posToIncoming[idx, default: []],
+            pos: pos,
+            incoming: posToIncoming[idx, default: []],
             outgoing: posToOutgoing[idx, default: []]
           )
         }
-      })
+      }
+    )
+  }
+
+  /// Compute a set over all tokenizations of the word, projected down to only
+  /// the edge and colors used by the word.
+  public func tokenizations(word: WordID) -> BitmapSet {
+    let edgeIDs = wordToEdges[word].sorted()
+    let startToEdges = Dictionary(grouping: edgeIDs, by: { edgeID in edges[edgeID].start })
+    let colorIDs = Set(edgeIDs.map { edges[$0].color }).sorted()
+    let wordLen = words[word].bytes.count
+    var prefixLenSets = [BitmapSet](
+      repeating: BitmapSet(edges: edgeIDs, colors: colorIDs),
+      count: wordLen + 1
+    )
+    prefixLenSets[0].bitmaps.insert(Bitmap(count: edgeIDs.count + colorIDs.count))
+    for i in 0..<wordLen {
+      let prefixSet = prefixLenSets[i]
+      for preSet in prefixSet.bitmaps {
+        for edgeID in startToEdges[i]! {
+          let edge = edges[edgeID]
+          var bmp = preSet
+          bmp[prefixSet.edgeToIdx[edgeID]!] = true
+          bmp[prefixSet.colorToIdx[edge.color]!] = true
+          prefixLenSets[i + edge.length].bitmaps.insert(bmp)
+        }
+      }
+    }
+    return prefixLenSets[word]
   }
 
 }

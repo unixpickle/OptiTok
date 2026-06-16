@@ -24,7 +24,21 @@ public struct Tokenizer {
     pretokenizer: NSRegularExpression? = nil,
   ) -> Tokenizer {
     var vocab = [[UInt8]]()
-    for (colorID, weight) in solution.colors.sorted(by: { $0.1 > $1.1 }) {
+    for (colorID, weight) in solution.colors.sorted(by: { (c0, c1) in
+      let (colorID0, score0) = c0
+      let (colorID1, score1) = c1
+      if score0 > score1 {
+        return true
+      } else if score0 == score1 {
+        let weight0 = graph.colorWeights[colorID0]
+        let weight1 = graph.colorWeights[colorID1]
+        let colorLen0 = graph.colors[colorID0].count
+        let colorLen1 = graph.colors[colorID1].count
+        return (weight0 > weight1 || (weight0 == weight1 && colorLen0 > colorLen1))
+      } else {
+        return false
+      }
+    }) {
       if weight == 0 || vocab.count == vocabLimit {
         break
       }
