@@ -21,11 +21,12 @@ public struct Graph: Codable {
   public var words: [Word]
   public var edges: [Edge]
 
-  /// Mapping of wordID to edges of the word.
+  /// Mapping of wordID to edges of the word, sorted by start index.
   public var wordToEdges: [Set<EdgeID>]
 
-  /// Mapping of edgeID to overlapping (conflicting) edges.
-  public var overlap: [Set<EdgeID>]
+  /// For each word, maps a given byte index to all of the edges that
+  /// cover this byte.
+  public var wordToCover: [[Set<EdgeID>]]
 
   /// Initialize the graph from a corpus of words, some of which may repeat arbitrarily many times.
   public init(
@@ -93,24 +94,16 @@ public struct Graph: Codable {
       wordToEdges[edge.word].insert(edgeID)
     }
 
-    overlap = edges.map { _ in [] }
-    for wordEdges in wordToEdges {
-      var posToEdges = [Int: Set<EdgeID>]()
+    wordToCover = words.map { Array(repeating: [], count: $0.bytes.count) }
+    for (wordID, wordEdges) in wordToEdges.enumerated() {
+      var cover = wordToCover[wordID]
       for edgeID in wordEdges {
         let edge = edges[edgeID]
         for i in edge.start..<(edge.start + edge.length) {
-          posToEdges[i, default: .init()].insert(edgeID)
-        }
-        for overlapSet in posToEdges.values {
-          for x in overlapSet {
-            for y in overlapSet {
-              if x != y {
-                overlap[x].insert(y)
-              }
-            }
-          }
+          cover[i].insert(edgeID)
         }
       }
+      wordToCover[wordID] = cover
     }
   }
 

@@ -2,33 +2,6 @@ import ArgumentParser
 import Foundation
 import OptiTok
 
-struct Summary: Codable {
-  var bookPath: String
-  var updatesDir: String
-  var wordCount: Int
-  var uniqueWordCount: Int
-  var colorCount: Int
-  var edgeCount: Int
-  var constraintCount: Int
-  var nonZeroEdgeCount: Int
-  var nonZeroColorCount: Int
-  var maxViolation: Double
-  var objective: Double
-  var options: Options
-
-  struct Options: Codable {
-    var maxColorLen: Int
-    var minColorOccurrences: Int
-    var forceSingleBytes: Bool
-    var vocabSize: Int
-    var threads: Int?
-    var solver: String?
-    var simplexStrategy: Int?
-    var logToConsole: Bool
-    var logFile: String?
-  }
-}
-
 @main
 struct SolveLoop: ParsableCommand {
 
@@ -39,8 +12,11 @@ struct SolveLoop: ParsableCommand {
   @Argument(help: "Path to the UTF-8 text file to load.")
   var bookPath: String
 
-  @Argument(help: "Directory where graph, LP, solver, solution, and summary updates are saved.")
+  @Argument(help: "Directory for solve state.")
   var updatesDir: String
+
+  @Flag(help: "Pretokenize the input corpus.")
+  var pretokenize = false
 
   @Option(help: "Maximum token/color byte length.")
   var maxColorLen = 16
@@ -90,7 +66,8 @@ struct SolveLoop: ParsableCommand {
 
     print("Loading book: \(bookPath)")
     let text = try Self.readText(bookPath)
-    let corpus = Tokenizer(vocab: []).pretokenize(text: text)
+    let pretokenizer: NSRegularExpression? = pretokenize ? Tokenizer.NanochatPretokenizer : nil
+    let corpus = Tokenizer(vocab: [], pretokenizer: pretokenizer).pretokenize(text: text)
     print("Pretokenized \(corpus.count) words.")
 
     print("Building graph...")
@@ -126,40 +103,20 @@ struct SolveLoop: ParsableCommand {
     let solution = try highsSolver.solve()
     try Self.writeState(solution, to: updatesURL.appendingPathComponent("solution.plist"))
     try Self.writeState(highsSolver, to: updatesURL.appendingPathComponent("solver.plist"))
-
-    let tok = Tokenizer.rounding(solution: solution, graph: graph, vocabLimit: vocabSize)
-    let tokCount = corpus.map { tok.encode(word: $0).count }.reduce(0, +)
+    print("Saved solution and solver checkpoint to \(updatesURL.path)")
 
     let check = lp.check(solution: solution)
-    let summary = Summary(
-      bookPath: bookPath,
-      updatesDir: updatesDir,
-      wordCount: corpus.count,
-      uniqueWordCount: graph.words.count,
-      colorCount: graph.colors.count,
-      edgeCount: graph.edges.count,
-      constraintCount: lp.constraints.count,
-      nonZeroEdgeCount: solution.edges.count,
-      nonZeroColorCount: solution.colors.count,
-      maxViolation: check.maxViolation,
-      objective: check.objective,
-      options: .init(
-        maxColorLen: maxColorLen,
-        minColorOccurrences: minColorOccurrences,
-        forceSingleBytes: forceSingleBytes,
-        vocabSize: vocabSize,
-        threads: threads,
-        solver: solver,
-        simplexStrategy: simplexStrategy,
-        logToConsole: logToConsole,
-        logFile: logFile
-      )
-    )
-    try Self.writeState(summary, to: updatesURL.appendingPathComponent("summary.plist"))
+    print("Objective: \(check.objective), max violation: \(check.maxViolation)")
 
-    print("Solved. Objective: \(check.objective), max violation: \(check.maxViolation)")
-    print("Rounded tokenizer: \(tokCount)")
-    print("Saved solution and solver checkpoint to \(updatesURL.path)")
+    print("Counting rounded tokens...")
+    let tok = Tokenizer.rounding(
+      solution: solution,
+      graph: graph,
+      vocabLimit: vocabSize,
+      pretokenizer: pretokenizer
+    )
+    let tokCount = corpus.map { tok.encode(word: $0).count }.reduce(0, +)
+    print("Rounded tokens: \(tokCount)")
   }
 
   private static func writeState<T: Encodable>(_ value: T, to url: URL) throws {
@@ -176,7 +133,8 @@ struct SolveLoop: ParsableCommand {
     if data.starts(with: [0xef, 0xbb, 0xbf]) {
       text = "\u{feff}" + text
     }
-    return text
+    return
+      text
       .replacingOccurrences(of: "\r\n", with: "\n")
       .replacingOccurrences(of: "\r", with: "\n")
   }

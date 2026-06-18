@@ -10,11 +10,11 @@ public struct Tokenizer {
 
   public typealias TokenID = Int
   public var vocab: [[UInt8]]
-  public var pretokenizer: NSRegularExpression
+  public var pretokenizer: NSRegularExpression?
 
   public init(vocab: [[UInt8]], pretokenizer: NSRegularExpression? = nil) {
     self.vocab = vocab
-    self.pretokenizer = pretokenizer ?? Self.NanochatPretokenizer
+    self.pretokenizer = pretokenizer
   }
 
   public static func rounding(
@@ -49,6 +49,9 @@ public struct Tokenizer {
 
   /// Split up the text into words that can be passed to encode().
   public func pretokenize(text: String) -> [[UInt8]] {
+    guard let pretokenizer = pretokenizer else {
+      return [Array(text.utf8)]
+    }
     let nsRange = NSRange(text.startIndex..<text.endIndex, in: text)
     let matches = pretokenizer.matches(in: text, options: [], range: nsRange)
     return matches.map { match in
