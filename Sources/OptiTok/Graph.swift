@@ -1,8 +1,8 @@
-public struct Graph: Codable {
+public typealias WordID = Int
+public typealias EdgeID = Int
+public typealias ColorID = Int
 
-  public typealias WordID = Int
-  public typealias EdgeID = Int
-  public typealias ColorID = Int
+public struct Graph: Codable {
 
   public struct Edge: Hashable, Codable {
     public let word: WordID
@@ -169,7 +169,7 @@ public struct Graph: Codable {
         }
       }
     }
-    return prefixLenSets[word]
+    return prefixLenSets[wordLen]
   }
 
 }

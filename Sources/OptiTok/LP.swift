@@ -2,8 +2,8 @@
 public struct LP: Codable {
 
   public struct Vector: Codable {
-    public var edges: [Graph.EdgeID: Double]
-    public var colors: [Graph.ColorID: Double]
+    public var edges: [EdgeID: Double]
+    public var colors: [ColorID: Double]
 
     public static var empty: Vector { Vector(edges: .init(), colors: .init()) }
 
@@ -11,6 +11,25 @@ public struct LP: Codable {
       let edgeDot = edges.map { (k, x) in x * v.edges[k, default: 0.0] }.reduce(0.0, +)
       let colorDot = colors.map { (k, x) in x * v.colors[k, default: 0.0] }.reduce(0.0, +)
       return edgeDot + colorDot
+    }
+
+    public static func from(bitmaps: BitmapSet) -> AnySequence<Vector> {
+      AnySequence(
+        bitmaps.bitmaps.lazy.map { bmp in
+          Vector(
+            edges: Dictionary(
+              uniqueKeysWithValues: bitmaps.edges.compactMap {
+                bmp[bitmaps.edgeToIdx[$0]!] ? ($0, 1) : nil
+              }
+            ),
+            colors: Dictionary(
+              uniqueKeysWithValues: bitmaps.colors.compactMap {
+                bmp[bitmaps.colorToIdx[$0]!] ? ($0, 1) : nil
+              }
+            )
+          )
+        }
+      )
     }
   }
 

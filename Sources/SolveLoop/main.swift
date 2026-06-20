@@ -5,6 +5,25 @@ import OptiTok
 @main
 struct SolveLoop: ParsableCommand {
 
+  struct State: Codable {
+    public enum NextStep: Codable {
+      case solveLP
+      case roundTokenizer
+      case findCuts
+      case done
+      case failed
+    }
+
+    public var corpus: [[UInt8]]
+    public var solver: HiGHSSolver
+    public var addedCuts: [CutCandidate] = []
+
+    public var nextStep: NextStep = .solveLP
+    public var lastSolution: LP.Vector? = nil
+    public var lastRoundedVocab: [[UInt8]]? = nil
+    public var round: Int = 0
+  }
+
   static let configuration = CommandConfiguration(
     abstract: "Build and solve an OptiTok LP relaxation for a text file."
   )
@@ -33,17 +52,17 @@ struct SolveLoop: ParsableCommand {
   @Option(help: "HiGHS thread count.")
   var threads: Int?
 
-  @Option(help: "HiGHS solver option, e.g. simplex.")
-  var solver: String?
-
-  @Option(help: "HiGHS simplex_strategy option.")
-  var simplexStrategy: Int?
-
   @Flag(help: "Enable HiGHS console logging.")
   var logToConsole = false
 
   @Option(help: "HiGHS log file path.")
   var logFile: String?
+
+  @Option(help: "Epsilon for cut selection.")
+  var cutEpsilon = 1e-4
+
+  @Option(help: "Epsilon for fractionality.")
+  var fractionalEpsilon = 1e-4
 
   mutating func validate() throws {
     guard maxColorLen > 0 else {
@@ -64,65 +83,137 @@ struct SolveLoop: ParsableCommand {
     let updatesURL = URL(fileURLWithPath: updatesDir)
     try FileManager.default.createDirectory(at: updatesURL, withIntermediateDirectories: true)
 
-    print("Loading book: \(bookPath)")
-    let text = try Self.readText(bookPath)
     let pretokenizer: NSRegularExpression? = pretokenize ? Tokenizer.NanochatPretokenizer : nil
-    let corpus = Tokenizer(vocab: [], pretokenizer: pretokenizer).pretokenize(text: text)
-    print("Pretokenized \(corpus.count) words.")
 
-    print("Building graph...")
-    let graph = Graph(
-      corpus: corpus,
-      maxColorLen: maxColorLen,
-      minColorOccurrences: minColorOccurrences,
-      forceSingleBytes: forceSingleBytes
-    )
-    try Self.writeState(graph, to: updatesURL.appendingPathComponent("graph.plist"))
-    print(
-      "Saved graph with \(graph.words.count) unique words, \(graph.colors.count) colors, \(graph.edges.count) edges."
-    )
-
-    print("Building LP...")
-    let lp = LP(graph: graph, limit: .vocabSize(vocabSize), forceSingleBytes: forceSingleBytes)
-    try Self.writeState(lp, to: updatesURL.appendingPathComponent("lp.plist"))
-    print("Saved LP with \(lp.constraints.count) constraints.")
-
-    print("Creating HiGHS solver...")
-    let highsSolver = try HiGHSSolver(
-      lp,
-      config: .init(
-        threads: threads,
-        solver: solver,
-        simplexStrategy: simplexStrategy,
-        logToConsole: logToConsole,
-        logFile: logFile
+    var state: State
+    do {
+      state = try Self.readState(
+        State.self,
+        from: updatesURL.appendingPathComponent("latest.plist")
       )
-    )
+    } catch {
+      print("Starting fresh after load error: \(error)")
+      print("Loading corpus: \(bookPath)")
+      let text = try Self.readText(bookPath)
 
-    print("Solving LP relaxation...")
-    let solution = try highsSolver.solve()
-    try Self.writeState(solution, to: updatesURL.appendingPathComponent("solution.plist"))
-    try Self.writeState(highsSolver, to: updatesURL.appendingPathComponent("solver.plist"))
-    print("Saved solution and solver checkpoint to \(updatesURL.path)")
+      let corpus = Tokenizer(vocab: [], pretokenizer: pretokenizer).pretokenize(text: text)
+      print("Pretokenized \(corpus.count) words.")
+      print("Building graph...")
+      let graph = Graph(
+        corpus: corpus,
+        maxColorLen: maxColorLen,
+        minColorOccurrences: minColorOccurrences,
+        forceSingleBytes: forceSingleBytes
+      )
+      try Self.writeState(graph, to: updatesURL.appendingPathComponent("graph.plist"))
+      print(
+        "Saved graph with \(graph.words.count) unique words, \(graph.colors.count) colors, \(graph.edges.count) edges."
+      )
 
-    let check = lp.check(solution: solution)
-    print("Objective: \(check.objective), max violation: \(check.maxViolation)")
+      print("Building LP...")
+      let lp = LP(graph: graph, limit: .vocabSize(vocabSize), forceSingleBytes: forceSingleBytes)
+      try Self.writeState(lp, to: updatesURL.appendingPathComponent("lp.plist"))
+      print("Saved LP with \(lp.constraints.count) constraints.")
 
-    print("Counting rounded tokens...")
-    let tok = Tokenizer.rounding(
-      solution: solution,
-      graph: graph,
-      vocabLimit: vocabSize,
-      pretokenizer: pretokenizer
-    )
-    let tokCount = corpus.map { tok.encode(word: $0).count }.reduce(0, +)
-    print("Rounded tokens: \(tokCount)")
+      print("Creating HiGHS solver...")
+      let highsSolver = try HiGHSSolver(
+        lp,
+        config: .init(
+          threads: threads,
+          logToConsole: logToConsole,
+          logFile: logFile
+        )
+      )
+
+      state = State(corpus: corpus, solver: highsSolver)
+    }
+
+    let cutAlgs: [(String, CutAlgorithm)] = [
+      ("word_edge_chain", WordEdgeChain(epsilon: cutEpsilon))
+    ]
+
+    func save() throws {
+      try Self.writeState(state, to: updatesURL.appendingPathComponent("latest.plist"))
+      try Self.writeState(
+        state,
+        to: updatesURL.appendingPathComponent("ckpt_\(state.round)_pre_\(state.nextStep).plist")
+      )
+    }
+
+    while true {
+      switch state.nextStep {
+      case .done:
+        print("found a solution")
+        return
+      case .failed:
+        print("failed to find a solution")
+        return
+      case .solveLP:
+        print("Solving LP relaxation...")
+        let solution = try state.solver.solve()
+        state.lastSolution = solution
+        state.nextStep = .roundTokenizer
+        try save()
+        let check = state.solver.lp.check(solution: solution)
+        print(
+          "round \(state.round): lower_bound=\(check.objective) max_violation=\(check.maxViolation)"
+        )
+      case .roundTokenizer:
+        print("Counting rounded tokens...")
+        let tok = Tokenizer.rounding(
+          solution: state.lastSolution!,
+          graph: state.solver.lp.graph,
+          vocabLimit: vocabSize,
+          pretokenizer: pretokenizer
+        )
+        state.lastRoundedVocab = tok.vocab
+        state.nextStep =
+          if state.lastSolution!.colors.values.allSatisfy({ $0 > 1 - fractionalEpsilon }) {
+            .done
+          } else {
+            .findCuts
+          }
+        try save()
+        let tokCount = state.corpus.map { tok.encode(word: $0).count }.reduce(0, +)
+        print("round \(state.round): rounded_tokens=\(tokCount)")
+      case .findCuts:
+        print("Searching for cuts...")
+        var allCuts = [CutCandidate]()
+        for (algName, alg) in cutAlgs {
+          print("working on cut algorithm: \(algName)")
+          allCuts.append(
+            contentsOf: alg.findCuts(
+              lp: state.solver.lp, solution: state.lastSolution!, callbacks: NopCallbacks()
+            )
+          )
+        }
+
+        // TODO: dedup cuts and limit by color pattern.
+        for row in allCuts {
+          try state.solver.add(constraint: row.constraint)
+        }
+
+        state.round += 1
+        state.nextStep = .solveLP
+        try save()
+
+        print("round \(state.round - 1): added_cuts=\(allCuts.count)")
+      }
+    }
+
+    print("Solver complete.")
   }
 
   private static func writeState<T: Encodable>(_ value: T, to url: URL) throws {
     let encoder = PropertyListEncoder()
     let data = try encoder.encode(value)
     try data.write(to: url, options: .atomic)
+  }
+
+  private static func readState<T: Decodable>(_: T.Type, from url: URL) throws -> T {
+    let dec = PropertyListDecoder()
+    let data = try Data(contentsOf: url)
+    return try dec.decode(T.self, from: data)
   }
 
   private static func readText(_ path: String) throws -> String {

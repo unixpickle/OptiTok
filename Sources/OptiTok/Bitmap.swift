@@ -1,12 +1,12 @@
 public struct BitmapSet {
-  public let edges: [Graph.EdgeID]
-  public let colors: [Graph.ColorID]
+  public let edges: [EdgeID]
+  public let colors: [ColorID]
   public var bitmaps: Set<Bitmap>
 
-  public let edgeToIdx: [Graph.EdgeID: Int]
-  public let colorToIdx: [Graph.ColorID: Int]
+  public let edgeToIdx: [EdgeID: Int]
+  public let colorToIdx: [ColorID: Int]
 
-  public init(edges: [Graph.EdgeID], colors: [Graph.ColorID], bitmaps: Set<Bitmap> = []) {
+  public init(edges: [EdgeID], colors: [ColorID], bitmaps: Set<Bitmap> = []) {
     self.edges = edges
     self.colors = colors
     self.bitmaps = bitmaps
@@ -15,8 +15,8 @@ public struct BitmapSet {
   }
 
   public func projected(
-    newEdges edges: some Sequence<Graph.EdgeID>,
-    newColors colors: some Sequence<Graph.ColorID>
+    newEdges edges: some Sequence<EdgeID>,
+    newColors colors: some Sequence<ColorID>
   ) -> BitmapSet {
     let edgeSet = Set(edges)
     let colorSet = Set(colors)

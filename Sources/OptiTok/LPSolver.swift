@@ -5,8 +5,8 @@ public class HiGHSSolver: Codable {
 
   public enum Error: Swift.Error, CustomStringConvertible {
     case couldNotCreateSolver
-    case highsError(operation: String, status: HighsInt)
-    case modelNotOptimal(status: HighsInt)
+    case highsError(operation: String, status: Int)
+    case modelNotOptimal(status: Int)
 
     public var description: String {
       switch self {
@@ -22,21 +22,15 @@ public class HiGHSSolver: Codable {
 
   public struct Config: Codable {
     public var threads: Int?
-    public var solver: String?
-    public var simplexStrategy: Int?
     public var logToConsole: Bool
     public var logFile: String?
 
     public init(
       threads: Int? = nil,
-      solver: String? = nil,
-      simplexStrategy: Int? = nil,
       logToConsole: Bool = false,
       logFile: String? = nil
     ) {
       self.threads = threads
-      self.solver = solver
-      self.simplexStrategy = simplexStrategy
       self.logToConsole = logToConsole
       self.logFile = logFile
     }
@@ -45,7 +39,6 @@ public class HiGHSSolver: Codable {
   private enum CodingKeys: String, CodingKey {
     case lp
     case config
-    case basis
   }
 
   private let highs: OpaquePointer
@@ -58,18 +51,13 @@ public class HiGHSSolver: Codable {
     let container = try decoder.container(keyedBy: CodingKeys.self)
     let lp = try container.decode(LP.self, forKey: .lp)
     let config = try container.decode(Config.self, forKey: .config)
-    let basis = try container.decodeIfPresent(Data.self, forKey: .basis)
     try self.init(lp, config: config)
-    if let basis {
-      try loadBasis(basis)
-    }
   }
 
   public func encode(to encoder: Encoder) throws {
     var container = encoder.container(keyedBy: CodingKeys.self)
     try container.encode(lp, forKey: .lp)
     try container.encode(config, forKey: .config)
-    try container.encodeIfPresent(dumpBasis(), forKey: .basis)
   }
 
   public init(_ lp: LP, config: Config = Config()) throws {
@@ -120,7 +108,7 @@ public class HiGHSSolver: Codable {
 
     let modelStatus = Highs_getModelStatus(UnsafeRawPointer(highs))
     guard modelStatus == kHighsModelStatusOptimal else {
-      throw Error.modelNotOptimal(status: modelStatus)
+      throw Error.modelNotOptimal(status: Int(modelStatus))
     }
 
     var colValues = Array(repeating: 0.0, count: columnCount)
@@ -178,19 +166,10 @@ public class HiGHSSolver: Codable {
         )
       }
     }
-    if let solver = config.solver {
-      try checkStatus(
-        Highs_setStringOptionValue(UnsafeMutableRawPointer(highs), "solver", solver),
-        operation: "set solver"
-      )
-    }
-    if let simplexStrategy = config.simplexStrategy {
-      try checkStatus(
-        Highs_setIntOptionValue(
-          UnsafeMutableRawPointer(highs), "simplex_strategy", HighsInt(simplexStrategy)),
-        operation: "set simplex_strategy"
-      )
-    }
+    try checkStatus(
+      Highs_setStringOptionValue(UnsafeMutableRawPointer(highs), "solver", "ipm"),
+      operation: "set solver"
+    )
     if let logFile = config.logFile {
       try checkStatus(
         Highs_setStringOptionValue(UnsafeMutableRawPointer(highs), "log_file", logFile),
@@ -256,43 +235,6 @@ public class HiGHSSolver: Codable {
     try checkStatus(status, operation: "pass LP")
     try passColumnNames()
     try passRowNames()
-  }
-
-  private func dumpBasis() throws -> Data? {
-    var basisValidity = HighsInt(0)
-    try checkStatus(
-      Highs_getIntInfoValue(UnsafeRawPointer(highs), "basis_validity", &basisValidity),
-      operation: "get basis_validity"
-    )
-    guard basisValidity == kHighsBasisValidityValid else {
-      return nil
-    }
-
-    let url = Self.temporaryBasisURL()
-    defer { try? FileManager.default.removeItem(at: url) }
-
-    try checkStatus(
-      CHighs_writeBasis(UnsafeMutableRawPointer(highs), url.path),
-      operation: "write basis"
-    )
-    return try Data(contentsOf: url)
-  }
-
-  private func loadBasis(_ data: Data) throws {
-    let url = Self.temporaryBasisURL()
-    defer { try? FileManager.default.removeItem(at: url) }
-
-    try data.write(to: url, options: .atomic)
-    try checkStatus(
-      CHighs_readBasis(UnsafeMutableRawPointer(highs), url.path),
-      operation: "read basis"
-    )
-  }
-
-  private static func temporaryBasisURL() -> URL {
-    FileManager.default.temporaryDirectory
-      .appendingPathComponent("OptiTok-\(UUID().uuidString)")
-      .appendingPathExtension("basis")
   }
 
   private func passColumnNames() throws {
@@ -364,7 +306,7 @@ public class HiGHSSolver: Codable {
 
   private func checkStatus(_ status: HighsInt, operation: String) throws {
     guard status == kHighsStatusOk else {
-      throw Error.highsError(operation: operation, status: status)
+      throw Error.highsError(operation: operation, status: Int(status))
     }
   }
 }

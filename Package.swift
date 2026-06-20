@@ -31,9 +31,6 @@ let package = Package(
             cSettings: [
                 .unsafeFlags(["-I\(highsInclude)", "-I\(highsNestedInclude)"])
             ],
-            cxxSettings: [
-                .unsafeFlags(["-std=c++17"])
-            ],
             linkerSettings: [
                 .linkedLibrary("highs"),
                 .unsafeFlags(["-L\(highsLib)", "-Xlinker", "-rpath", "-Xlinker", highsLib])
