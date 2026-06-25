@@ -87,18 +87,21 @@ struct SolveLoop: ParsableCommand {
 
     var state: State
     do {
+      let url = updatesURL.appendingPathComponent("latest.plist")
       state = try Self.readState(
         State.self,
-        from: updatesURL.appendingPathComponent("latest.plist")
+        from: url
       )
+      print("Loaded existing train state from: \(url.path)")
     } catch {
-      print("Starting fresh after load error: \(error)")
-      print("Loading corpus: \(bookPath)")
+      print("Starting fresh after load error")
+      print(" => loading corpus: \(bookPath)...")
       let text = try Self.readText(bookPath)
 
       let corpus = Tokenizer(vocab: [], pretokenizer: pretokenizer).pretokenize(text: text)
-      print("Pretokenized \(corpus.count) words.")
-      print("Building graph...")
+      print(" => pretokenized_words=\(corpus.count)")
+
+      print(" => building graph...")
       let graph = Graph(
         corpus: corpus,
         maxColorLen: maxColorLen,
@@ -107,15 +110,11 @@ struct SolveLoop: ParsableCommand {
       )
       try Self.writeState(graph, to: updatesURL.appendingPathComponent("graph.plist"))
       print(
-        "Saved graph with \(graph.words.count) unique words, \(graph.colors.count) colors, \(graph.edges.count) edges."
+        " => saved graph: words=\(graph.words.count) colors=\(graph.colors.count) edges=\(graph.edges.count)"
       )
 
-      print("Building LP...")
+      print(" => building LP solver...")
       let lp = LP(graph: graph, limit: .vocabSize(vocabSize), forceSingleBytes: forceSingleBytes)
-      try Self.writeState(lp, to: updatesURL.appendingPathComponent("lp.plist"))
-      print("Saved LP with \(lp.constraints.count) constraints.")
-
-      print("Creating HiGHS solver...")
       let highsSolver = try HiGHSSolver(
         lp,
         config: .init(
@@ -127,6 +126,8 @@ struct SolveLoop: ParsableCommand {
 
       state = State(corpus: corpus, solver: highsSolver)
     }
+
+    print("----- running solver -----")
 
     let cutAlgs: [(String, CutAlgorithm)] = [
       ("word_edge_chain", WordEdgeChain(epsilon: cutEpsilon))
@@ -149,17 +150,17 @@ struct SolveLoop: ParsableCommand {
         print("failed to find a solution")
         return
       case .solveLP:
-        print("Solving LP relaxation...")
+        print("round \(state.round): solving LP relaxation...")
         let solution = try state.solver.solve()
         state.lastSolution = solution
         state.nextStep = .roundTokenizer
         try save()
         let check = state.solver.lp.check(solution: solution)
         print(
-          "round \(state.round): lower_bound=\(check.objective) max_violation=\(check.maxViolation)"
+          " => round \(state.round): lower_bound=\(check.objective) max_violation=\(check.maxViolation)"
         )
       case .roundTokenizer:
-        print("Counting rounded tokens...")
+        print("round \(state.round): counting rounded tokens...")
         let tok = Tokenizer.rounding(
           solution: state.lastSolution!,
           graph: state.solver.lp.graph,
@@ -175,12 +176,12 @@ struct SolveLoop: ParsableCommand {
           }
         try save()
         let tokCount = state.corpus.map { tok.encode(word: $0).count }.reduce(0, +)
-        print("round \(state.round): rounded_tokens=\(tokCount)")
+        print(" => round \(state.round): rounded_tokens=\(tokCount)")
       case .findCuts:
-        print("Searching for cuts...")
+        print("round \(state.round): searching for cuts...")
         var allCuts = [CutCandidate]()
         for (algName, alg) in cutAlgs {
-          print("working on cut algorithm: \(algName)")
+          print(" => working on cut algorithm: \(algName)")
           allCuts.append(
             contentsOf: alg.findCuts(
               lp: state.solver.lp, solution: state.lastSolution!, callbacks: NopCallbacks()
@@ -194,10 +195,18 @@ struct SolveLoop: ParsableCommand {
         }
 
         state.round += 1
-        state.nextStep = .solveLP
+        state.nextStep =
+          if allCuts.isEmpty {
+            .failed
+          } else {
+            .solveLP
+          }
         try save()
 
-        print("round \(state.round - 1): added_cuts=\(allCuts.count)")
+        let maxVi = allCuts.map { $0.violation }.max() ?? 0
+        print(
+          " => round \(state.round - 1): added_cuts=\(allCuts.count) max_cut_violation=\(maxVi)"
+        )
       }
     }
 

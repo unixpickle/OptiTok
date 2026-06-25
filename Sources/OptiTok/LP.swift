@@ -13,6 +13,18 @@ public struct LP: Codable {
       return edgeDot + colorDot
     }
 
+    public func union(_ v: Vector) -> Vector {
+      var newEdges = edges
+      for (k, v) in v.edges {
+        newEdges[k] = v
+      }
+      var newColors = colors
+      for (k, v) in v.colors {
+        newColors[k] = v
+      }
+      return Vector(edges: newEdges, colors: newColors)
+    }
+
     public static func from(bitmaps: BitmapSet) -> AnySequence<Vector> {
       AnySequence(
         bitmaps.bitmaps.lazy.map { bmp in
