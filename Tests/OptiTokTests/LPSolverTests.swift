@@ -26,17 +26,6 @@ import Testing
 
   #expect(check.maxViolation < 1e-7)
   #expect(abs(check.objective - 4.0) < 1e-7)
-
-  let encoded = try JSONEncoder().encode(solver)
-  let json = String(data: encoded, encoding: .utf8) ?? ""
-  #expect(!json.contains("\"basis\""))
-
-  let decodedSolver = try JSONDecoder().decode(HiGHSSolver.self, from: encoded)
-  let decodedSolution = try decodedSolver.solve()
-  let decodedCheck = lp.check(solution: decodedSolution)
-
-  #expect(decodedCheck.maxViolation < 1e-7)
-  #expect(abs(decodedCheck.objective - 4.0) < 1e-7)
 }
 
 @Test func testHiGHSSolverMultipleThreads() async throws {

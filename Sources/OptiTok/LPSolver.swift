@@ -1,7 +1,7 @@
 import CHiGHS
 import Foundation
 
-public class HiGHSSolver: Codable {
+public class HiGHSSolver {
 
   public enum Error: Swift.Error, CustomStringConvertible {
     case couldNotCreateSolver
@@ -24,15 +24,18 @@ public class HiGHSSolver: Codable {
     public var threads: Int?
     public var logToConsole: Bool
     public var logFile: String?
+    public var perturbation: Double
 
     public init(
       threads: Int? = nil,
       logToConsole: Bool = false,
-      logFile: String? = nil
+      logFile: String? = nil,
+      perturbation: Double = 0
     ) {
       self.threads = threads
       self.logToConsole = logToConsole
       self.logFile = logFile
+      self.perturbation = perturbation
     }
   }
 
@@ -185,10 +188,10 @@ public class HiGHSSolver: Codable {
 
     var colCost = Array(repeating: 0.0, count: columnCount)
     for (edgeID, value) in lp.objective.edges {
-      colCost[lp.edgeToCol[edgeID]] = value
+      colCost[lp.edgeToCol[edgeID]] = value - Double.random(in: 0...config.perturbation)
     }
     for (colorID, value) in lp.objective.colors {
-      colCost[lp.colorToCol[colorID]] = value
+      colCost[lp.colorToCol[colorID]] = value - Double.random(in: 0...config.perturbation)
     }
 
     let colLower = Array(repeating: 0.0, count: columnCount)

@@ -24,10 +24,6 @@ public struct Graph: Codable {
   /// Mapping of wordID to edges of the word, sorted by start index.
   public var wordToEdges: [Set<EdgeID>]
 
-  /// For each word, maps a given byte index to all of the edges that
-  /// cover this byte.
-  public var wordToCover: [[Set<EdgeID>]]
-
   /// Initialize the graph from a corpus of words, some of which may repeat arbitrarily many times.
   public init(
     corpus: [[UInt8]], maxColorLen: Int, minColorOccurrences: Int, forceSingleBytes: Bool = true
@@ -92,18 +88,6 @@ public struct Graph: Codable {
     wordToEdges = words.map { _ in [] }
     for (edgeID, edge) in edges.enumerated() {
       wordToEdges[edge.word].insert(edgeID)
-    }
-
-    wordToCover = words.map { Array(repeating: [], count: $0.bytes.count) }
-    for (wordID, wordEdges) in wordToEdges.enumerated() {
-      var cover = wordToCover[wordID]
-      for edgeID in wordEdges {
-        let edge = edges[edgeID]
-        for i in edge.start..<(edge.start + edge.length) {
-          cover[i].insert(edgeID)
-        }
-      }
-      wordToCover[wordID] = cover
     }
   }
 
@@ -170,6 +154,37 @@ public struct Graph: Codable {
       }
     }
     return prefixLenSets[wordLen]
+  }
+
+  /// Conflicts iterates over unique conflicts.
+  public func conflicts(
+    edges relevantEdges: some Sequence<EdgeID>
+  ) -> AnySequence<(EdgeID, EdgeID)> {
+    let byWord = Dictionary(grouping: relevantEdges, by: { edge in edges[edge].word })
+    return AnySequence(
+      byWord.sorted(by: { $0.key < $1.key }).lazy.flatMap { (wordID, edgeIDs) in
+        let word = words[wordID]
+        var cover = [Set<EdgeID>](repeating: [], count: word.bytes.count)
+        for edgeID in edgeIDs {
+          let edge = edges[edgeID]
+          for i in edge.start..<(edge.start + edge.length) {
+            cover[i].insert(edgeID)
+          }
+        }
+        return edgeIDs.sorted().lazy.flatMap { edgeID in
+          let edge = edges[edgeID]
+          var seen = Set<EdgeID>()
+          var results = [(EdgeID, EdgeID)]()
+          for i in edge.start..<(edge.start + edge.length) {
+            for other in cover[i] {
+              if other > edgeID && seen.insert(other).inserted {
+                results.append((edgeID, other))
+              }
+            }
+          }
+          return results
+        }
+      })
   }
 
 }

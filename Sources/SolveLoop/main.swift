@@ -15,7 +15,7 @@ struct SolveLoop: ParsableCommand {
     }
 
     public var corpus: [[UInt8]]
-    public var solver: HiGHSSolver
+    public var lp: LP
     public var addedCuts: [CutCandidate] = []
 
     public var nextStep: NextStep = .solveLP
@@ -58,11 +58,17 @@ struct SolveLoop: ParsableCommand {
   @Option(help: "HiGHS log file path.")
   var logFile: String?
 
+  @Option(help: "Additional LP cost perturbation.")
+  var perturbation: Double = 1e-6
+
   @Option(help: "Epsilon for cut selection.")
   var cutEpsilon = 1e-4
 
   @Option(help: "Epsilon for fractionality.")
   var fractionalEpsilon = 1e-4
+
+  @Option(help: "Cut limit per round.")
+  var cutLimit = 10000
 
   mutating func validate() throws {
     guard maxColorLen > 0 else {
@@ -113,27 +119,32 @@ struct SolveLoop: ParsableCommand {
         " => saved graph: words=\(graph.words.count) colors=\(graph.colors.count) edges=\(graph.edges.count)"
       )
 
-      print(" => building LP solver...")
+      print(" => building LP...")
       let lp = LP(graph: graph, limit: .vocabSize(vocabSize), forceSingleBytes: forceSingleBytes)
-      let highsSolver = try HiGHSSolver(
-        lp,
-        config: .init(
-          threads: threads,
-          logToConsole: logToConsole,
-          logFile: logFile
-        )
-      )
 
-      state = State(corpus: corpus, solver: highsSolver)
+      state = State(corpus: corpus, lp: lp)
     }
+
+    let solver = try HiGHSSolver(
+      state.lp,
+      config: .init(
+        threads: threads,
+        logToConsole: logToConsole,
+        logFile: logFile,
+        perturbation: perturbation
+      )
+    )
 
     print("----- running solver -----")
 
     let cutAlgs: [(String, CutAlgorithm)] = [
-      ("word_edge_chain", WordEdgeChain(epsilon: cutEpsilon))
+      ("word_edge_chain", WordEdgeChain(epsilon: cutEpsilon)),
+      ("3cycle", FractionalCycle(cycleLength: 3, epsilon: cutEpsilon)),
+      ("5cycle", FractionalCycle(cycleLength: 5, epsilon: cutEpsilon)),
     ]
 
     func save() throws {
+      state.lp = solver.lp
       try Self.writeState(state, to: updatesURL.appendingPathComponent("latest.plist"))
       try Self.writeState(
         state,
@@ -151,11 +162,11 @@ struct SolveLoop: ParsableCommand {
         return
       case .solveLP:
         print("round \(state.round): solving LP relaxation...")
-        let solution = try state.solver.solve()
+        let solution = try solver.solve()
         state.lastSolution = solution
         state.nextStep = .roundTokenizer
         try save()
-        let check = state.solver.lp.check(solution: solution)
+        let check = solver.lp.check(solution: solution)
         print(
           " => round \(state.round): lower_bound=\(check.objective) max_violation=\(check.maxViolation)"
         )
@@ -163,7 +174,7 @@ struct SolveLoop: ParsableCommand {
         print("round \(state.round): counting rounded tokens...")
         let tok = Tokenizer.rounding(
           solution: state.lastSolution!,
-          graph: state.solver.lp.graph,
+          graph: solver.lp.graph,
           vocabLimit: vocabSize,
           pretokenizer: pretokenizer
         )
@@ -184,14 +195,18 @@ struct SolveLoop: ParsableCommand {
           print(" => working on cut algorithm: \(algName)")
           allCuts.append(
             contentsOf: alg.findCuts(
-              lp: state.solver.lp, solution: state.lastSolution!, callbacks: NopCallbacks()
+              lp: solver.lp, solution: state.lastSolution!, callbacks: NopCallbacks()
             )
           )
         }
 
-        // TODO: dedup cuts and limit by color pattern.
+        if allCuts.count > cutLimit {
+          allCuts.sort { $0.violation > $1.violation }
+          allCuts.removeLast(allCuts.count - cutLimit)
+        }
+        print("adding \(allCuts.count) cuts")
         for row in allCuts {
-          try state.solver.add(constraint: row.constraint)
+          try solver.add(constraint: row.constraint)
         }
 
         state.round += 1

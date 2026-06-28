@@ -193,3 +193,101 @@ public struct WordEdgeChain: CutAlgorithm {
   }
 
 }
+
+public struct FractionalCycle: CutAlgorithm {
+
+  public var cycleLength: Int
+  public var maxCheckCycles: Int
+  public var maxConflictsPerPair: Int
+  public var epsilon = 1e-4
+
+  public init(
+    cycleLength: Int = 3,
+    maxCheckCycles: Int = 10_000_000,
+    maxConflictsPerPair: Int = 1,
+    epsilon: Double = 1e-4
+  ) {
+    self.cycleLength = cycleLength
+    self.maxCheckCycles = maxCheckCycles
+    self.maxConflictsPerPair = maxConflictsPerPair
+    self.epsilon = epsilon
+  }
+
+  public func findCuts(
+    lp: LP,
+    solution: LP.Vector,
+    callbacks: CutCallbacks
+  ) -> [CutCandidate] {
+    let fracEdges = findFractionalEdges(graph: lp.graph, solution: solution, epsilon: epsilon)
+    var colorPairToEdgePairs = [Set<ColorID>: Set<Set<EdgeID>>]()
+    let cg = ConflictGraph<ColorID>(
+      pairs: lp.graph.conflicts(edges: fracEdges).map { (edgeID1, edgeID2) in
+        let c1 = lp.graph.edges[edgeID1].color
+        let c2 = lp.graph.edges[edgeID2].color
+        let cKey = Set<ColorID>([c1, c2])
+        let eValue = Set<EdgeID>([edgeID1, edgeID2])
+        if let existing = colorPairToEdgePairs[cKey], existing.count >= maxConflictsPerPair {
+        } else {
+          colorPairToEdgePairs[cKey, default: []].insert(eValue)
+        }
+        return (c1, c2)
+      }
+    )
+
+    var cuts = [CutCandidate]()
+    var existing = Set<Set<EdgeID>>()
+    for (seen, cycle) in cg.cycles(cycleLength).enumerated() {
+      if seen >= maxCheckCycles {
+        break
+      }
+      // For each color pair, pick a candidate edge pair and compute the
+      // final constraint value.
+      var coeffs = LP.Vector.empty
+      for (i, colorID) in cycle.enumerated() {
+        let colorPair = Set<ColorID>([cycle[i], cycle[(i + 1) % cycle.count]])
+        guard let edgePair = colorPairToEdgePairs[colorPair]?.randomElement() else {
+          fatalError("cycle() returned an invalid pair")
+        }
+        for e in edgePair {
+          coeffs.edges[e, default: 0] += 1
+        }
+        coeffs.colors[colorID] = -1
+      }
+
+      let rhs = Double(cycleLength / 2)
+      let lhs = coeffs.dot(solution)
+      let violation = lhs - rhs
+      if violation > epsilon {
+        // Avoid redundant cuts
+        let edgeSet = Set(coeffs.edges.keys)
+        if existing.insert(edgeSet).inserted {
+          cuts.append(
+            CutCandidate(
+              constraint: LP.Constraint(coeffs: coeffs, upperBound: rhs),
+              violation: violation
+            )
+          )
+        }
+      }
+    }
+
+    return cuts
+  }
+}
+
+private func findFractionalEdges(graph: Graph, solution: LP.Vector, epsilon: Double) -> [EdgeID] {
+  let fracColors = Set(
+    solution.colors.compactMap {
+      $0.1 > epsilon && $0.1 < 1 - epsilon ? $0.0 : nil
+    }
+  )
+  return solution.edges.compactMap { (edgeID, weight) -> EdgeID? in
+    if weight < epsilon || weight > 1 - epsilon {
+      return nil
+    }
+    if !fracColors.contains(graph.edges[edgeID].color) {
+      return nil
+    }
+    return edgeID
+  }
+}
