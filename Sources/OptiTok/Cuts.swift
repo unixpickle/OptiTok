@@ -41,7 +41,7 @@ public struct WordEdgeChain: CutAlgorithm {
     maxChainLength: Int = 6,
     fracEdgesPerPos: Int = 4,
     maxChainsPerPair: Int = 16,
-    maxChecksPerPair: Int = 1,
+    maxChecksPerPair: Int = 1
   ) {
     self.epsilon = epsilon
     self.minChainLength = minChainLength
@@ -178,8 +178,11 @@ public struct WordEdgeChain: CutAlgorithm {
 
     var chains = [[EdgeID]]()
     func recurse(pos: Int, chain: [EdgeID]) {
-      if chain.count > minChainLength {
+      if chain.count >= minChainLength {
         chains.append(chain)
+      }
+      if chain.count == maxChainLength {
+        return
       }
       for x in posToEdge[pos] ?? [] {
         recurse(pos: pos + 1, chain: chain + [x])
@@ -218,18 +221,32 @@ public struct FractionalCycle: CutAlgorithm {
     solution: LP.Vector,
     callbacks: CutCallbacks
   ) -> [CutCandidate] {
+    struct Priority: Comparable {
+      let edgeWeight: Double
+      let wordWeight: Double
+
+      static func < (lhs: Priority, rhs: Priority) -> Bool {
+        (lhs.edgeWeight, lhs.wordWeight) < (rhs.edgeWeight, rhs.wordWeight)
+      }
+    }
+
     let fracEdges = findFractionalEdges(graph: lp.graph, solution: solution, epsilon: epsilon)
-    var colorPairToEdgePairs = [Set<ColorID>: Set<Set<EdgeID>>]()
+    var colorPairToEdgePairs = [Set<ColorID>: TopK<Set<EdgeID>, Priority>]()
     let cg = ConflictGraph<ColorID>(
       pairs: lp.graph.conflicts(edges: fracEdges).map { (edgeID1, edgeID2) in
         let c1 = lp.graph.edges[edgeID1].color
         let c2 = lp.graph.edges[edgeID2].color
+        let word = lp.graph.words[lp.graph.edges[edgeID1].word]
         let cKey = Set<ColorID>([c1, c2])
         let eValue = Set<EdgeID>([edgeID1, edgeID2])
-        if let existing = colorPairToEdgePairs[cKey], existing.count >= maxConflictsPerPair {
-        } else {
-          colorPairToEdgePairs[cKey, default: []].insert(eValue)
+        var edgeWeight = solution.edges[edgeID1, default: 0] + solution.edges[edgeID2, default: 0]
+        if edgeWeight > 1 - epsilon {
+          edgeWeight = 1
         }
+        colorPairToEdgePairs[cKey, default: .init(k: max(1, maxConflictsPerPair))].add(
+          item: eValue,
+          priority: Priority(edgeWeight: edgeWeight, wordWeight: word.weight)
+        )
         return (c1, c2)
       }
     )

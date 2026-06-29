@@ -16,4 +16,8 @@ struct TopK<T, P: Comparable> {
       _items.remove(at: items.count - 1)
     }
   }
+
+  public func randomElement() -> T? {
+    _items.randomElement()?.0
+  }
 }
