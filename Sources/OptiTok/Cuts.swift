@@ -95,20 +95,15 @@ public struct WordEdgeChain: CutAlgorithm {
     }
 
     for topk in pairsToChains.values {
-      let chains = topk.items
-      if chains.count < 2 {
+      if topk.count < 2 {
         continue
       }
 
-      // TODO: don't do naive enumeration + shuffle + truncation here
-      var pairs = (0..<chains.count).flatMap { i in
-        Array((0..<chains.count - 1).map { j in (i, j + (j >= i ? 1 : 0)) })
-      }
-      pairs.shuffle()
-
-      for (idx0, idx1) in pairs.prefix(maxChecksPerPair) {
-        let ch0 = chains[idx0]
-        let ch1 = chains[idx1]
+      for pair in randomCrosses(maxChecksPerPair, [0..<topk.count, 0..<(topk.count - 1)]) {
+        let idx0 = pair[0]
+        let idx1 = pair[1] + (pair[1] >= idx0 ? 1 : 0)
+        let ch0 = topk[idx0]
+        let ch1 = topk[idx1]
         let (v0, _, _) = chainVector(lp: lp, chain: ch0.edges)
         let (v1, _, _) = chainVector(lp: lp, chain: ch1.edges)
         let fullVector = v0.union(v1)
@@ -202,17 +197,20 @@ public struct FractionalCycle: CutAlgorithm {
   public var cycleLength: Int
   public var maxCheckCycles: Int
   public var maxConflictsPerPair: Int
+  public var maxChoicesPerCycle: Int
   public var epsilon = 1e-4
 
   public init(
     cycleLength: Int = 3,
     maxCheckCycles: Int = 10_000_000,
-    maxConflictsPerPair: Int = 1,
+    maxConflictsPerPair: Int = 2,
+    maxChoicesPerCycle: Int = 4,
     epsilon: Double = 1e-4
   ) {
     self.cycleLength = cycleLength
     self.maxCheckCycles = maxCheckCycles
     self.maxConflictsPerPair = maxConflictsPerPair
+    self.maxChoicesPerCycle = maxChoicesPerCycle
     self.epsilon = epsilon
   }
 
@@ -257,27 +255,31 @@ public struct FractionalCycle: CutAlgorithm {
       if seen >= maxCheckCycles {
         break
       }
-      // For each color pair, pick a candidate edge pair and compute the
-      // final constraint value.
-      var coeffs = LP.Vector.empty
-      for (i, colorID) in cycle.enumerated() {
-        let colorPair = Set<ColorID>([cycle[i], cycle[(i + 1) % cycle.count]])
-        guard let edgePair = colorPairToEdgePairs[colorPair]?.randomElement() else {
-          fatalError("cycle() returned an invalid pair")
-        }
-        for e in edgePair {
-          coeffs.edges[e, default: 0] += 1
-        }
-        coeffs.colors[colorID] = -1
+      var colorCoeffs = LP.Vector.empty
+      for colorID in cycle {
+        colorCoeffs.colors[colorID] = -1
       }
+      let allEdgePairs = cycle.indices.map { i in
+        let colorPair = Set<ColorID>([cycle[i], cycle[(i + 1) % cycle.count]])
+        return colorPairToEdgePairs[colorPair]!
+      }
+      for edgePairs in randomCrosses(maxChoicesPerCycle, allEdgePairs) {
+        var coeffs = colorCoeffs
+        for ep in edgePairs {
+          for e in ep {
+            coeffs.edges[e, default: 0] += 1
+          }
+        }
 
-      let rhs = Double(cycleLength / 2)
-      let lhs = coeffs.dot(solution)
-      let violation = lhs - rhs
-      if violation > epsilon {
-        // Avoid redundant cuts
-        let edgeSet = Set(coeffs.edges.keys)
-        if existing.insert(edgeSet).inserted {
+        let rhs = Double(cycleLength / 2)
+        let lhs = coeffs.dot(solution)
+        let violation = lhs - rhs
+        if violation > epsilon {
+          // Avoid redundant cuts
+          let edgeSet = Set(coeffs.edges.keys)
+          if !existing.insert(edgeSet).inserted {
+            continue
+          }
           cuts.append(
             CutCandidate(
               constraint: LP.Constraint(coeffs: coeffs, upperBound: rhs),

@@ -70,6 +70,9 @@ struct SolveLoop: ParsableCommand {
   @Option(help: "Cut limit per round.")
   var cutLimit = 10000
 
+  @Flag(help: "Drop cuts whose nonzero edge/color variables are already covered by higher-violation cuts.")
+  var noCoveredCuts = false
+
   mutating func validate() throws {
     guard maxColorLen > 0 else {
       throw ValidationError("--max-color-len must be positive")
@@ -138,7 +141,6 @@ struct SolveLoop: ParsableCommand {
     print("----- running solver -----")
 
     let cutAlgs: [(String, CutAlgorithm)] = [
-      ("word_edge_chain", WordEdgeChain(epsilon: cutEpsilon)),
       ("3cycle", FractionalCycle(cycleLength: 3, epsilon: cutEpsilon)),
       ("5cycle", FractionalCycle(cycleLength: 5, epsilon: cutEpsilon)),
     ]
@@ -200,11 +202,15 @@ struct SolveLoop: ParsableCommand {
           )
         }
 
+        allCuts.sort { $0.violation > $1.violation }
+        print(" => starting with \(allCuts.count) raw cuts")
+        if noCoveredCuts {
+          allCuts = filterCoveredCuts(allCuts)
+        }
         if allCuts.count > cutLimit {
-          allCuts.sort { $0.violation > $1.violation }
           allCuts.removeLast(allCuts.count - cutLimit)
         }
-        print("adding \(allCuts.count) cuts")
+        print(" => adding \(allCuts.count) cuts")
         for row in allCuts {
           try solver.add(constraint: row.constraint)
         }
@@ -226,6 +232,27 @@ struct SolveLoop: ParsableCommand {
     }
 
     print("Solver complete.")
+  }
+
+  private func filterCoveredCuts(_ cuts: [CutCandidate]) -> [CutCandidate] {
+    var coveredEdges = Set<EdgeID>()
+    var coveredColors = Set<ColorID>()
+    var result = [CutCandidate]()
+    for cut in cuts {
+      let newEdges = cut.constraint.coeffs.edges.filter { edgeID, value in
+        value > cutEpsilon && !coveredEdges.contains(edgeID)
+      }
+      let newColors = cut.constraint.coeffs.colors.filter { colorID, value in
+        value > cutEpsilon && !coveredColors.contains(colorID)
+      }
+      if newEdges.isEmpty && newColors.isEmpty {
+        continue
+      }
+      result.append(cut)
+      coveredEdges.formUnion(newEdges.keys)
+      coveredColors.formUnion(newColors.keys)
+    }
+    return result
   }
 
   private static func writeState<T: Encodable>(_ value: T, to url: URL) throws {
