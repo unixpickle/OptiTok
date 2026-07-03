@@ -3,10 +3,17 @@
 
 import PackageDescription
 
-let highsPrefix = Context.environment["HIGHS_PREFIX"] ?? "/opt/homebrew/opt/highs"
-let highsInclude = "\(highsPrefix)/include"
-let highsNestedInclude = "\(highsPrefix)/include/highs"
-let highsLib = "\(highsPrefix)/lib"
+let soPlexPrefix = Context.environment["SOPLEX_PREFIX"] ?? "/opt/homebrew/opt/soplex"
+let soPlexInclude = "\(soPlexPrefix)/include"
+let soPlexLib = "\(soPlexPrefix)/lib"
+let boostPrefix = Context.environment["BOOST_PREFIX"] ?? "/opt/homebrew/opt/boost"
+let boostInclude = "\(boostPrefix)/include"
+let gmpPrefix = Context.environment["GMP_PREFIX"] ?? "/opt/homebrew/opt/gmp"
+let gmpInclude = "\(gmpPrefix)/include"
+let gmpLib = "\(gmpPrefix)/lib"
+let mpfrPrefix = Context.environment["MPFR_PREFIX"] ?? "/opt/homebrew/opt/mpfr"
+let mpfrInclude = "\(mpfrPrefix)/include"
+let mpfrLib = "\(mpfrPrefix)/lib"
 
 let package = Package(
     name: "OptiTok",
@@ -26,20 +33,42 @@ let package = Package(
         // Targets are the basic building blocks of a package, defining a module or a test suite.
         // Targets can depend on other targets in this package and products from dependencies.
         .target(
-            name: "CHiGHS",
+            name: "CSoPlex",
             publicHeadersPath: "include",
             cSettings: [
-                .unsafeFlags(["-I\(highsInclude)", "-I\(highsNestedInclude)"])
+                .unsafeFlags([
+                    "-I\(soPlexInclude)",
+                    "-I\(boostInclude)",
+                    "-I\(gmpInclude)",
+                    "-I\(mpfrInclude)",
+                ])
+            ],
+            cxxSettings: [
+                .unsafeFlags([
+                    "-std=c++17",
+                    "-I\(soPlexInclude)",
+                    "-I\(boostInclude)",
+                    "-I\(gmpInclude)",
+                    "-I\(mpfrInclude)",
+                ])
             ],
             linkerSettings: [
-                .linkedLibrary("highs"),
-                .unsafeFlags(["-L\(highsLib)", "-Xlinker", "-rpath", "-Xlinker", highsLib])
+                .linkedLibrary("soplex"),
+                .linkedLibrary("gmp"),
+                .linkedLibrary("mpfr"),
+                .linkedLibrary("z"),
+                .unsafeFlags([
+                    "-L\(soPlexLib)", "-L\(gmpLib)", "-L\(mpfrLib)",
+                    "-Xlinker", "-rpath", "-Xlinker", soPlexLib,
+                    "-Xlinker", "-rpath", "-Xlinker", gmpLib,
+                    "-Xlinker", "-rpath", "-Xlinker", mpfrLib,
+                ])
             ]),
         .target(
             name: "OptiTok",
-            dependencies: ["CHiGHS"],
+            dependencies: ["CSoPlex"],
             swiftSettings: [
-                .unsafeFlags(["-Xcc", "-I\(highsInclude)", "-Xcc", "-I\(highsNestedInclude)"])
+                .unsafeFlags(["-Xcc", "-I\(soPlexInclude)"])
             ]),
         .executableTarget(
             name: "SolveLoop",
@@ -48,13 +77,13 @@ let package = Package(
                 .product(name: "ArgumentParser", package: "swift-argument-parser"),
             ],
             swiftSettings: [
-                .unsafeFlags(["-Xcc", "-I\(highsInclude)", "-Xcc", "-I\(highsNestedInclude)"])
+                .unsafeFlags(["-Xcc", "-I\(soPlexInclude)"])
             ]),
         .testTarget(
             name: "OptiTokTests",
             dependencies: ["OptiTok"],
             swiftSettings: [
-                .unsafeFlags(["-Xcc", "-I\(highsInclude)", "-Xcc", "-I\(highsNestedInclude)"])
+                .unsafeFlags(["-Xcc", "-I\(soPlexInclude)"])
             ]
         ),
     ]

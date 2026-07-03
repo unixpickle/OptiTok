@@ -4,15 +4,20 @@ This is an attempt to cleanly implement ILP with cutting planes for optimal toke
 
 ## Dependencies
 
-OptiTok links against the HiGHS C API. On macOS with Homebrew:
+OptiTok links against the SoPlex C++ API through a small C bridge. On macOS with Homebrew:
 
 ```sh
-brew install highs
+brew install soplex
 swift test
 ```
 
-The Swift package defaults to `/opt/homebrew/opt/highs`. If HiGHS is installed somewhere else, set `HIGHS_PREFIX` to the install prefix before building:
+The Swift package defaults to Homebrew's `/opt/homebrew/opt` prefixes for SoPlex, Boost, GMP,
+and MPFR. If they are installed somewhere else, set the relevant prefix variables before building:
 
 ```sh
-HIGHS_PREFIX=/usr/local/opt/highs swift test
+SOPLEX_PREFIX=/usr/local/opt/soplex \
+  BOOST_PREFIX=/usr/local/opt/boost \
+  GMP_PREFIX=/usr/local/opt/gmp \
+  MPFR_PREFIX=/usr/local/opt/mpfr \
+  swift test
 ```

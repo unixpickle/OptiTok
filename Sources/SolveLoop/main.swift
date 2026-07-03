@@ -16,6 +16,7 @@ struct SolveLoop: ParsableCommand {
 
     public var corpus: [[UInt8]]
     public var lp: LP
+    public var basis: SoPlexSolver.Basis? = nil
     public var addedCuts: [CutCandidate] = []
 
     public var nextStep: NextStep = .solveLP
@@ -49,14 +50,8 @@ struct SolveLoop: ParsableCommand {
   @Option(help: "Vocabulary-size LP limit.")
   var vocabSize = 512
 
-  @Option(help: "HiGHS thread count.")
-  var threads: Int?
-
-  @Flag(help: "Enable HiGHS console logging.")
+  @Flag(help: "Enable SoPlex console logging.")
   var logToConsole = false
-
-  @Option(help: "HiGHS log file path.")
-  var logFile: String?
 
   @Option(help: "Additional LP cost perturbation.")
   var perturbation: Double = 1e-6
@@ -66,6 +61,18 @@ struct SolveLoop: ParsableCommand {
 
   @Option(help: "Epsilon for fractionality.")
   var fractionalEpsilon = 1e-4
+
+  @Option(help: "3-cycle template edge pairs retained per conflicting color pair.")
+  var cycle3PairsPerColorPair = 2
+
+  @Option(help: "3-cycle template cross-product samples checked per color cycle.")
+  var cycle3MaxCrossProductCount = 4
+
+  @Option(help: "5-cycle template edge pairs retained per conflicting color pair.")
+  var cycle5PairsPerColorPair = 2
+
+  @Option(help: "5-cycle template cross-product samples checked per color cycle.")
+  var cycle5MaxCrossProductCount = 4
 
   @Option(help: "Cut limit per round.")
   var cutLimit = 10000
@@ -83,8 +90,17 @@ struct SolveLoop: ParsableCommand {
     guard vocabSize > 0 else {
       throw ValidationError("--vocab-size must be positive")
     }
-    if let threads, threads <= 0 {
-      throw ValidationError("--threads must be positive")
+    guard cycle3PairsPerColorPair > 0 else {
+      throw ValidationError("--cycle3-pairs-per-color-pair must be positive")
+    }
+    guard cycle3MaxCrossProductCount > 0 else {
+      throw ValidationError("--cycle3-max-cross-product-count must be positive")
+    }
+    guard cycle5PairsPerColorPair > 0 else {
+      throw ValidationError("--cycle5-pairs-per-color-pair must be positive")
+    }
+    guard cycle5MaxCrossProductCount > 0 else {
+      throw ValidationError("--cycle5-max-cross-product-count must be positive")
     }
   }
 
@@ -128,25 +144,45 @@ struct SolveLoop: ParsableCommand {
       state = State(corpus: corpus, lp: lp)
     }
 
-    let solver = try HiGHSSolver(
+    let solver = try SoPlexSolver(
       state.lp,
       config: .init(
-        threads: threads,
         logToConsole: logToConsole,
-        logFile: logFile,
         perturbation: perturbation
       )
     )
+    if let basis = state.basis {
+      print(" => restoring SoPlex basis: rows=\(basis.rows.count) columns=\(basis.columns.count)")
+      try solver.restore(basis: basis)
+    }
 
     print("----- running solver -----")
 
     let cutAlgs: [(String, CutAlgorithm)] = [
-      ("3cycle", FractionalCycle(cycleLength: 3, epsilon: cutEpsilon)),
-      ("5cycle", FractionalCycle(cycleLength: 5, epsilon: cutEpsilon)),
+      ("edge_chain", WordEdgeChain(epsilon: cutEpsilon)),
+      (
+        "3cycle",
+        FractionalCycle(
+          cycleLength: 3,
+          maxConflictsPerPair: cycle3PairsPerColorPair,
+          maxChoicesPerCycle: cycle3MaxCrossProductCount,
+          epsilon: cutEpsilon
+        )
+      ),
+      (
+        "5cycle",
+        FractionalCycle(
+          cycleLength: 5,
+          maxConflictsPerPair: cycle5PairsPerColorPair,
+          maxChoicesPerCycle: cycle5MaxCrossProductCount,
+          epsilon: cutEpsilon
+        )
+      ),
     ]
 
     func save() throws {
       state.lp = solver.lp
+      state.basis = try solver.basis()
       try Self.writeState(state, to: updatesURL.appendingPathComponent("latest.plist"))
       try Self.writeState(
         state,
@@ -182,7 +218,7 @@ struct SolveLoop: ParsableCommand {
         )
         state.lastRoundedVocab = tok.vocab
         state.nextStep =
-          if state.lastSolution!.colors.values.allSatisfy({ $0 > 1 - fractionalEpsilon }) {
+          if state.lastSolution!.colors.values.count(where: { $0 > fractionalEpsilon }) <= vocabSize {
             .done
           } else {
             .findCuts
@@ -211,9 +247,7 @@ struct SolveLoop: ParsableCommand {
           allCuts.removeLast(allCuts.count - cutLimit)
         }
         print(" => adding \(allCuts.count) cuts")
-        for row in allCuts {
-          try solver.add(constraint: row.constraint)
-        }
+        try solver.add(constraints: allCuts.map(\.constraint))
 
         state.round += 1
         state.nextStep =
