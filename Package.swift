@@ -21,7 +21,10 @@ let package = Package(
         // Products define the executables and libraries a package produces, making them visible to other packages.
         .library(
             name: "OptiTok",
-            targets: ["OptiTok"]),
+            targets: ["OptiTok", "SoPlex"]),
+        .library(
+            name: "SoPlex",
+            targets: ["SoPlex"]),
         .executable(
             name: "SolveLoop",
             targets: ["SolveLoop"]),
@@ -65,8 +68,14 @@ let package = Package(
                 ])
             ]),
         .target(
-            name: "OptiTok",
+            name: "SoPlex",
             dependencies: ["CSoPlex"],
+            swiftSettings: [
+                .unsafeFlags(["-Xcc", "-I\(soPlexInclude)"])
+            ]),
+        .target(
+            name: "OptiTok",
+            dependencies: ["SoPlex"],
             swiftSettings: [
                 .unsafeFlags(["-Xcc", "-I\(soPlexInclude)"])
             ]),
@@ -81,7 +90,7 @@ let package = Package(
             ]),
         .testTarget(
             name: "OptiTokTests",
-            dependencies: ["OptiTok"],
+            dependencies: ["OptiTok", "SoPlex"],
             swiftSettings: [
                 .unsafeFlags(["-Xcc", "-I\(soPlexInclude)"])
             ]
