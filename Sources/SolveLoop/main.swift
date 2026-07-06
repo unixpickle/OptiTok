@@ -77,8 +77,8 @@ struct SolveLoop: ParsableCommand {
   @Option(help: "Cut limit per round.")
   var cutLimit = 10000
 
-  @Flag(help: "Drop cuts whose nonzero edge/color variables are already covered by higher-violation cuts.")
-  var noCoveredCuts = false
+  @Option(help: "Cut filtering strategy: none, uncovered, disjoint.")
+  var cutFilter: CutFilter = .none
 
   mutating func validate() throws {
     guard maxColorLen > 0 else {
@@ -218,7 +218,8 @@ struct SolveLoop: ParsableCommand {
         )
         state.lastRoundedVocab = tok.vocab
         state.nextStep =
-          if state.lastSolution!.colors.values.count(where: { $0 > fractionalEpsilon }) <= vocabSize {
+          if state.lastSolution!.colors.values.count(where: { $0 > fractionalEpsilon }) <= vocabSize
+          {
             .done
           } else {
             .findCuts
@@ -240,9 +241,7 @@ struct SolveLoop: ParsableCommand {
 
         allCuts.sort { $0.violation > $1.violation }
         print(" => starting with \(allCuts.count) raw cuts")
-        if noCoveredCuts {
-          allCuts = filterCoveredCuts(allCuts)
-        }
+        allCuts = cutFilter.filter(cuts: allCuts)
         if allCuts.count > cutLimit {
           allCuts.removeLast(allCuts.count - cutLimit)
         }
@@ -266,27 +265,6 @@ struct SolveLoop: ParsableCommand {
     }
 
     print("Solver complete.")
-  }
-
-  private func filterCoveredCuts(_ cuts: [CutCandidate]) -> [CutCandidate] {
-    var coveredEdges = Set<EdgeID>()
-    var coveredColors = Set<ColorID>()
-    var result = [CutCandidate]()
-    for cut in cuts {
-      let newEdges = cut.constraint.coeffs.edges.filter { edgeID, value in
-        value > cutEpsilon && !coveredEdges.contains(edgeID)
-      }
-      let newColors = cut.constraint.coeffs.colors.filter { colorID, value in
-        value > cutEpsilon && !coveredColors.contains(colorID)
-      }
-      if newEdges.isEmpty && newColors.isEmpty {
-        continue
-      }
-      result.append(cut)
-      coveredEdges.formUnion(newEdges.keys)
-      coveredColors.formUnion(newColors.keys)
-    }
-    return result
   }
 
   private static func writeState<T: Encodable>(_ value: T, to url: URL) throws {
@@ -313,5 +291,94 @@ struct SolveLoop: ParsableCommand {
       text
       .replacingOccurrences(of: "\r\n", with: "\n")
       .replacingOccurrences(of: "\r", with: "\n")
+  }
+
+  enum CutFilter: String, Codable, ExpressibleByArgument {
+    case none
+    case uncovered
+    case disjoint
+
+    public func filter(cuts: [CutCandidate]) -> [CutCandidate] {
+      switch self {
+      case .none: return cuts
+      case .uncovered: return filterCoveredCuts(cuts)
+      case .disjoint: return filterDisjointCuts(cuts)
+      }
+    }
+
+    private func filterCoveredCuts(_ cuts: [CutCandidate]) -> [CutCandidate] {
+      var coveredEdges = Set<EdgeID>()
+      var coveredColors = Set<ColorID>()
+      var result = [CutCandidate]()
+      for cut in cuts {
+        let newEdges = cut.constraint.coeffs.edges.filter { edgeID, value in
+          value != 0 && !coveredEdges.contains(edgeID)
+        }
+        let newColors = cut.constraint.coeffs.colors.filter { colorID, value in
+          value != 0 && !coveredColors.contains(colorID)
+        }
+        if newEdges.isEmpty && newColors.isEmpty {
+          continue
+        }
+        result.append(cut)
+        coveredEdges.formUnion(newEdges.keys)
+        coveredColors.formUnion(newColors.keys)
+      }
+      return result
+    }
+
+    private func filterDisjointCuts(_ cuts: [CutCandidate]) -> [CutCandidate] {
+      typealias CutID = Int
+
+      // Form an adjacency graph for every cut
+      var colorToCuts = [ColorID: Set<CutID>]()
+      var edgeToCuts = [EdgeID: Set<CutID>]()
+      for (id, cut) in cuts.enumerated() {
+        for (color, value) in cut.constraint.coeffs.colors {
+          if value != 0 {
+            colorToCuts[color, default: .init()].insert(id)
+          }
+        }
+        for (edge, value) in cut.constraint.coeffs.edges {
+          if value != 0 {
+            edgeToCuts[edge, default: .init()].insert(id)
+          }
+        }
+      }
+
+      var remaining = Set<CutID>(cuts.indices)
+
+      func adjacency(cut cutID: CutID) -> Set<CutID> {
+        let cut = cuts[cutID]
+        var neighbors = Set<CutID>()
+        for (color, value) in cut.constraint.coeffs.colors {
+          if value != 0 {
+            neighbors.formUnion(colorToCuts[color]!)
+          }
+        }
+        for (edge, value) in cut.constraint.coeffs.edges {
+          if value != 0 {
+            neighbors.formUnion(edgeToCuts[edge]!)
+          }
+        }
+        neighbors.remove(cutID)
+        return neighbors.filter(remaining.contains)
+      }
+
+      let sortedCuts = cuts.indices.sorted { (x, y) in cuts[x].violation > cuts[y].violation }
+      var result = [CutCandidate]()
+      for cut in sortedCuts {
+        if !remaining.contains(cut) {
+          continue
+        }
+        result.append(cuts[cut])
+        remaining.remove(cut)
+        for neighbor in adjacency(cut: cut) {
+          remaining.remove(neighbor)
+        }
+      }
+
+      return result
+    }
   }
 }
