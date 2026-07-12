@@ -7,6 +7,7 @@ extern "C" {
 
 typedef struct CSoPlexModel CSoPlexModel;
 
+double CSoPlex_infinity(void);
 CSoPlexModel *CSoPlex_newModel(int logToConsole);
 void CSoPlex_deleteModel(CSoPlexModel *model);
 

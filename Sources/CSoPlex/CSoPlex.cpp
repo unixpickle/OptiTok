@@ -42,6 +42,19 @@ namespace
    }
 }
 
+double CSoPlex_infinity(void)
+{
+   try
+   {
+      soplex::SoPlex solver;
+      return solver.realParam(soplex::SoPlex::INFTY);
+   }
+   catch(...)
+   {
+      return 1e100;
+   }
+}
+
 CSoPlexModel* CSoPlex_newModel(int logToConsole)
 {
    try

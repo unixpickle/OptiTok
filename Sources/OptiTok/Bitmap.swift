@@ -9,6 +9,7 @@ public struct BitmapSet: Equatable {
 
   public let edgeToIdx: [EdgeID: Int]
   public let colorToIdx: [ColorID: Int]
+  public var bitCount: Int { edges.count + colors.count }
 
   public init(
     edges: some Sequence<EdgeID>,
@@ -38,6 +39,31 @@ public struct BitmapSet: Equatable {
   }
 
   public func cross(_ other: BitmapSet) -> BitmapSet {
+    let (baseSet, allSets) = crossNested(other)
+    var newSet = baseSet
+    for set in allSets {
+      for bmp in set {
+        newSet.bitmaps.insert(bmp)
+      }
+    }
+    return newSet
+  }
+
+  public func cross(_ other: BitmapSet, limit: Int) -> BitmapSet? {
+    let (baseSet, allSets) = crossNested(other)
+    var newSet = baseSet
+    for set in allSets {
+      for bmp in set {
+        newSet.bitmaps.insert(bmp)
+        if newSet.bitmaps.count > limit {
+          return nil
+        }
+      }
+    }
+    return newSet
+  }
+
+  private func crossNested(_ other: BitmapSet) -> (BitmapSet, AnySequence<AnySequence<Bitmap>>) {
     let sharedEdges = Set(edges).intersection(other.edges)
     let sharedColors = Set(colors).intersection(other.colors)
 
@@ -50,27 +76,30 @@ public struct BitmapSet: Equatable {
     // Now join the other bitmap set to this one.
     let newEdges = Set(edges).union(other.edges).sorted()
     let newColors = Set(colors).union(other.colors).sorted()
-    var newSet = BitmapSet(edges: newEdges, colors: newColors)
+    let newSet = BitmapSet(edges: newEdges, colors: newColors)
 
     let leftMapping = newSet.map(subEdges: edges, subColors: colors)
     let rightMapping = newSet.map(subEdges: other.edges, subColors: other.colors)
 
-    for (key, rightItem) in zip(
-      other.projectedBitmaps(edges: sharedEdges, colors: sharedColors).2, other.bitmaps
-    ) {
-      for leftItem in keyToLeft[key] ?? [] {
-        var newBitmap = Bitmap(count: newEdges.count + newColors.count)
-        for (src, dst) in leftMapping.enumerated() {
-          newBitmap[dst] = leftItem[src]
-        }
-        for (src, dst) in rightMapping.enumerated() {
-          newBitmap[dst] = rightItem[src]
-        }
-        newSet.bitmaps.insert(newBitmap)
-      }
-    }
-
-    return newSet
+    return (
+      newSet,
+      AnySequence(
+        zip(
+          other.projectedBitmaps(edges: sharedEdges, colors: sharedColors).2, other.bitmaps
+        ).lazy.map { (key, rightItem) in
+          return AnySequence(
+            (keyToLeft[key] ?? []).map { leftItem in
+              var newBitmap = Bitmap(count: newEdges.count + newColors.count)
+              for (src, dst) in leftMapping.enumerated() {
+                newBitmap[dst] = leftItem[src]
+              }
+              for (src, dst) in rightMapping.enumerated() {
+                newBitmap[dst] = rightItem[src]
+              }
+              return newBitmap
+            })
+        })
+    )
   }
 
   private func projectedBitmaps(
@@ -112,9 +141,33 @@ public struct BitmapSet: Equatable {
     return sourceIndices
   }
 
+  /// Create a new set by augmenting every bitmap with additional color combinations.
+  /// In particular, if a bitmap has false colors, we will cross this bitmap with every
+  /// possible bitset of these colors.
+  public func fillingFalseColors() -> BitmapSet {
+    var result = self
+    var queue = Array(result.bitmaps)
+    while let item = queue.popLast() {
+      for idx in colorToIdx.values {
+        if !item[idx] {
+          var newItem = item
+          newItem[idx] = true
+          if result.bitmaps.insert(newItem).inserted {
+            queue.append(newItem)
+          }
+        }
+      }
+    }
+    return result
+  }
+
 }
 
-public struct Bitmap: Hashable, CustomStringConvertible {
+public struct Bitmap: Hashable, CustomStringConvertible, Collection {
+
+  public typealias Index = Int
+  public typealias Element = Bool
+
   public let count: Int
   public var pattern: [UInt64]
 
@@ -131,6 +184,9 @@ public struct Bitmap: Hashable, CustomStringConvertible {
     return "Bitmap(\(bitString))"
   }
 
+  public var startIndex: Int { 0 }
+  public var endIndex: Int { count }
+
   public init(count: Int) {
     self.count = count
     let wordCount = (count / 64) + (count % 64 == 0 ? 0 : 1)
@@ -144,6 +200,10 @@ public struct Bitmap: Hashable, CustomStringConvertible {
     for (i, x) in bits.enumerated() {
       self[i] = x
     }
+  }
+
+  public func index(after i: Int) -> Int {
+    i + 1
   }
 
   public subscript(index: Int) -> Bool {

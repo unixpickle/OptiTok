@@ -59,6 +59,12 @@ struct SolveLoop: ParsableCommand {
   @Option(help: "Epsilon for cut selection.")
   var cutEpsilon = 1e-4
 
+  @Option(
+    help:
+      "Sample cut bounds this fraction of the way from the cut value toward the current solution value."
+  )
+  var cutBoundEps = 0.0
+
   @Option(help: "Epsilon for fractionality.")
   var fractionalEpsilon = 1e-4
 
@@ -80,6 +86,12 @@ struct SolveLoop: ParsableCommand {
   @Option(help: "Cut filtering strategy: none, uncovered, disjoint.")
   var cutFilter: CutFilter = .none
 
+  @Option(help: "Number of brute force pairs to check.")
+  var bruteForcePairs: Int = 0
+
+  @Option(help: "Number of brute force triples to check.")
+  var bruteForceTriples: Int = 0
+
   mutating func validate() throws {
     guard maxColorLen > 0 else {
       throw ValidationError("--max-color-len must be positive")
@@ -89,6 +101,9 @@ struct SolveLoop: ParsableCommand {
     }
     guard vocabSize > 0 else {
       throw ValidationError("--vocab-size must be positive")
+    }
+    guard cutBoundEps >= 0 && cutBoundEps <= 1 else {
+      throw ValidationError("--cut-bound-eps must be between 0 and 1")
     }
     guard cycle3PairsPerColorPair > 0 else {
       throw ValidationError("--cycle3-pairs-per-color-pair must be positive")
@@ -158,7 +173,7 @@ struct SolveLoop: ParsableCommand {
 
     print("----- running solver -----")
 
-    let cutAlgs: [(String, CutAlgorithm)] = [
+    var cutAlgs: [(String, CutAlgorithm)] = [
       ("edge_chain", WordEdgeChain(epsilon: cutEpsilon)),
       (
         "3cycle",
@@ -179,6 +194,32 @@ struct SolveLoop: ParsableCommand {
         )
       ),
     ]
+    if bruteForcePairs > 0 {
+      cutAlgs.insert(
+        (
+          "brute_force_pairs",
+          BruteForceWordGroup(
+            epsilon: cutEpsilon,
+            crossSize: 2,
+            candidateCount: bruteForcePairs
+          )
+        ),
+        at: 0
+      )
+    }
+    if bruteForceTriples > 0 {
+      cutAlgs.insert(
+        (
+          "brute_force_triples",
+          BruteForceWordGroup(
+            epsilon: cutEpsilon,
+            crossSize: 3,
+            candidateCount: bruteForceTriples
+          )
+        ),
+        at: 0
+      )
+    }
 
     func save() throws {
       state.lp = solver.lp
@@ -245,6 +286,7 @@ struct SolveLoop: ParsableCommand {
         if allCuts.count > cutLimit {
           allCuts.removeLast(allCuts.count - cutLimit)
         }
+        allCuts = sampleCutBounds(allCuts, solution: state.lastSolution!)
         print(" => adding \(allCuts.count) cuts")
         try solver.add(constraints: allCuts.map(\.constraint))
 
@@ -265,6 +307,38 @@ struct SolveLoop: ParsableCommand {
     }
 
     print("Solver complete.")
+  }
+
+  private func sampleCutBounds(_ cuts: [CutCandidate], solution: LP.Vector) -> [CutCandidate] {
+    guard cutBoundEps > 0 else {
+      return cuts
+    }
+
+    return cuts.map { cut in
+      var cut = cut
+      let value = cut.constraint.coeffs.dot(solution)
+      var violation: Double? = nil
+
+      if let upperBound = cut.constraint.upperBound, value > upperBound {
+        let newUpperBound = sampleCutBound(bound: upperBound, solutionValue: value)
+        cut.constraint.upperBound = newUpperBound
+        violation = max(violation ?? 0, value - newUpperBound)
+      }
+      if let lowerBound = cut.constraint.lowerBound, value < lowerBound {
+        let newLowerBound = sampleCutBound(bound: lowerBound, solutionValue: value)
+        cut.constraint.lowerBound = newLowerBound
+        violation = max(violation ?? 0, newLowerBound - value)
+      }
+
+      if let violation {
+        cut.violation = violation
+      }
+      return cut
+    }
+  }
+
+  private func sampleCutBound(bound: Double, solutionValue: Double) -> Double {
+    bound + Double.random(in: 0...cutBoundEps) * (solutionValue - bound)
   }
 
   private static func writeState<T: Encodable>(_ value: T, to url: URL) throws {

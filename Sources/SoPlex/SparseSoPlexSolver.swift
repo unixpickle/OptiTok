@@ -77,7 +77,7 @@ public final class SparseSoPlexSolver {
     }
   }
 
-  public static let infinity = 1.0e30
+  public static let infinity = CSoPlex_infinity()
 
   private let model: OpaquePointer
   private var pendingBasis: Basis? = nil

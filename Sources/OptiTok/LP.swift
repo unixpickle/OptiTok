@@ -69,6 +69,19 @@ public struct LP: Codable {
       self.lowerBound = lowerBound
       self.upperBound = upperBound
     }
+
+    /// Check the violation for a given solution, which is 0 if no violation occurs.
+    public func violation(solution: Vector) -> Double {
+      var maxViolation = 0.0
+      let value = coeffs.dot(solution)
+      if let lower = lowerBound, value < lower {
+        maxViolation = lower - value
+      }
+      if let upper = upperBound, value > upper {
+        maxViolation = max(maxViolation, value - upper)
+      }
+      return maxViolation
+    }
   }
 
   // Limit determines how to limit the vocabulary.
@@ -159,13 +172,7 @@ public struct LP: Codable {
     var maxViolation = 0.0
     let objValue = solution.dot(objective)
     for c in constraints {
-      let value = c.coeffs.dot(solution)
-      if let lower = c.lowerBound, value < lower {
-        maxViolation = max(maxViolation, lower - value)
-      }
-      if let upper = c.upperBound, value > upper {
-        maxViolation = max(maxViolation, value - upper)
-      }
+      maxViolation = max(maxViolation, c.violation(solution: solution))
     }
     return (maxViolation, objValue)
   }

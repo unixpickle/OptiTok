@@ -1,6 +1,9 @@
+import SoPlex
+
 public protocol CutCallbacks {
   func reportStage(cutName: String, stage: String)
   func reportProgress(cutName: String, stage: String, progress: Double)
+  func reportError(cutName: String, error: Error)
 }
 
 public struct NopCallbacks: CutCallbacks {
@@ -10,6 +13,9 @@ public struct NopCallbacks: CutCallbacks {
   }
 
   public func reportProgress(cutName: String, stage: String, progress: Double) {
+  }
+
+  public func reportError(cutName: String, error: Error) {
   }
 }
 
@@ -309,4 +315,218 @@ private func findFractionalEdges(graph: Graph, solution: LP.Vector, epsilon: Dou
     }
     return edgeID
   }
+}
+
+public struct BruteForceWordGroup: CutAlgorithm {
+
+  public var epsilon: Double
+  public var crossSize: Int
+  public var maxConstraints: Int
+  public var candidateCount: Int
+
+  public init(
+    epsilon: Double = 1e-4,
+    crossSize: Int = 2,
+    maxConstraints: Int = 10000,
+    candidateCount: Int = 10000
+  ) {
+    self.epsilon = epsilon
+    self.crossSize = crossSize
+    self.maxConstraints = maxConstraints
+    self.candidateCount = candidateCount
+  }
+
+  public func findCuts(
+    lp: LP,
+    solution: LP.Vector,
+    callbacks: CutCallbacks
+  ) -> [CutCandidate] {
+    var results = [CutCandidate]()
+    for wordIDs in wordSets(lp: lp, solution: solution) {
+      guard let combinations = wordCross(lp: lp, solution: solution, words: wordIDs) else {
+        continue
+      }
+      do {
+        let constraint = try findCut(combos: combinations, solution: solution)
+        let violation = constraint.violation(solution: solution)
+        if violation > epsilon {
+          results.append(CutCandidate(constraint: constraint, violation: violation))
+        }
+      } catch {
+        callbacks.reportError(cutName: "BruteForceWordGroup", error: error)
+      }
+    }
+    return results
+  }
+
+  public func wordSets(lp: LP, solution: LP.Vector) -> [[WordID]] {
+    var colorToWords = [ColorID: Set<WordID>]()
+
+    for wordID in lp.graph.words.indices {
+      for colorID in fracColors(lp: lp, solution: solution, word: wordID) {
+        colorToWords[colorID, default: .init()].insert(wordID)
+      }
+    }
+
+    let availableWords = colorToWords.values.reduce(Set<WordID>(), { $0.union($1) })
+    if availableWords.count < crossSize {
+      return []
+    }
+
+    // Sample without replacement using rejection sampling, but bail if we
+    // sample too much, so that we don't spend forever trying to sample more
+    // valid combos than there are.
+    var checked = Set<Set<WordID>>()
+    for _ in 0..<(candidateCount * 4) {
+      if checked.count == candidateCount {
+        break
+      }
+
+      let firstWord = availableWords.randomElement()!
+      var wordIDs = [firstWord]
+      for _ in 1..<crossSize {
+        let candidateColors = wordIDs.reduce(
+          Set<ColorID>(), { $0.union(fracColors(lp: lp, solution: solution, word: $1)) })
+        let wordSets: [Set<WordID>] = candidateColors.map { colorToWords[$0]! }
+        let wordSet = wordSets.reduce(Set<WordID>(), { $0.union($1) }).filter({
+          !wordIDs.contains($0)
+        })
+        guard let nextWord = wordSet.randomElement() else {
+          break
+        }
+        wordIDs.append(nextWord)
+      }
+      if wordIDs.count == crossSize {
+        checked.insert(Set(wordIDs))
+      }
+    }
+    return checked.map { $0.sorted() }
+  }
+
+  public func fracColors(lp: LP, solution: LP.Vector, word: WordID) -> Set<ColorID> {
+    Set(
+      lp.graph.wordToEdges[word].compactMap { edgeID in
+        let edgeVal = solution.edges[edgeID, default: 0]
+        if edgeVal < epsilon || edgeVal > 1 - epsilon {
+          return nil
+        }
+        let color = lp.graph.edges[edgeID].color
+        let colorVal = solution.colors[color, default: 0]
+        if colorVal < epsilon || colorVal > 1 - epsilon {
+          return nil
+        }
+        return color
+      }
+    )
+  }
+
+  public func wordCross(lp: LP, solution: LP.Vector, words wordIDs: [WordID]) -> BitmapSet? {
+    // Keep every color that has at least two occurrences.
+    var colorCount = [ColorID: Int]()
+    for wordID in wordIDs {
+      for colorID in fracColors(lp: lp, solution: solution, word: wordID) {
+        colorCount[colorID, default: 0] += 1
+      }
+    }
+    let keepColors = Set(colorCount.compactMap { $0.value > 1 ? $0.key : nil })
+    let individualBitmaps: [BitmapSet] = wordIDs.map { wordID in
+      let fullTok = lp.graph.tokenizations(word: wordID)
+      let colors = keepColors.intersection(fracColors(lp: lp, solution: solution, word: wordID))
+      let remainingEdges = lp.graph.wordToEdges[wordID].filter { edgeID in
+        let edgeValue = solution.edges[edgeID, default: 0]
+        return colors.contains(lp.graph.edges[edgeID].color)
+          && edgeValue > epsilon
+          && edgeValue < 1 - epsilon
+      }
+      return fullTok.projected(edges: remainingEdges, colors: colors).fillingFalseColors()
+    }
+    var result = individualBitmaps[0]
+    for bmp in individualBitmaps[1...] {
+      guard let next = bmp.cross(result, limit: maxConstraints) else {
+        return nil
+      }
+      result = next
+    }
+    return result
+  }
+
+  public func findCut(combos: BitmapSet, solution: LP.Vector) throws -> LP.Constraint {
+    // We have a pos and neg variable for each bit, plus a final bias
+    var varToObj = [Double](repeating: 0, count: combos.bitCount * 2 + 2)
+    for (edgeID, bitIdx) in combos.edgeToIdx {
+      varToObj[bitIdx * 2] = -solution.edges[edgeID, default: 0]
+      varToObj[bitIdx * 2 + 1] = solution.edges[edgeID, default: 0]
+    }
+    for (colorID, bitIdx) in combos.colorToIdx {
+      varToObj[bitIdx * 2] = -solution.colors[colorID, default: 0]
+      varToObj[bitIdx * 2 + 1] = solution.colors[colorID, default: 0]
+    }
+    varToObj[varToObj.count - 2] = -1
+    varToObj[varToObj.count - 1] = 1
+
+    let columns = varToObj.enumerated().map { (i, obj) in
+      SparseSoPlexSolver.Column(objective: obj, lowerBound: 0)
+    }
+    let lp = try SparseSoPlexSolver(columns: columns)
+
+    // Add L1 constraint to optimal cut coefficients
+    try lp.add(
+      row: .init(
+        entries: (0..<(varToObj.count - 2)).map { i in
+          .init(column: i, value: 1)
+        },
+        lowerBound: nil,
+        upperBound: 1
+      )
+    )
+
+    // We split the bias into positive/negative because SoPlex doesn't support
+    // unbounded variables, but now there's an unbounded direction for the LP,
+    // so we will constrain the bias to a large but finite L1 norm.
+    try lp.add(
+      row: .init(
+        entries: [
+          .init(column: varToObj.count - 2, value: 1),
+          .init(column: varToObj.count - 1, value: 1),
+        ],
+        lowerBound: nil,
+        upperBound: Double(varToObj.count * 2),
+      )
+    )
+
+    // Note that these coefficients are negative of the above, since the
+    // objective is minimization but these are upper bound constraints.
+    for bmp in combos.bitmaps {
+      var entries = [SparseSoPlexSolver.RowEntry]()
+      for (i, bit) in bmp.enumerated() {
+        if bit {
+          entries.append(.init(column: i * 2, value: 1))
+          entries.append(.init(column: i * 2 + 1, value: -1))
+        }
+      }
+      entries.append(.init(column: varToObj.count - 2, value: 1))
+      entries.append(.init(column: varToObj.count - 1, value: -1))
+      try lp.add(row: .init(entries: entries, lowerBound: nil, upperBound: 0))
+    }
+
+    let solution = try lp.solve()
+
+    var coeffs = LP.Vector.empty
+    for (edgeID, bitIdx) in combos.edgeToIdx {
+      let value = solution[bitIdx * 2] - solution[bitIdx * 2 + 1]
+      if abs(value) > epsilon {
+        coeffs.edges[edgeID] = value
+      }
+    }
+    for (colorID, bitIdx) in combos.colorToIdx {
+      let value = solution[bitIdx * 2] - solution[bitIdx * 2 + 1]
+      if abs(value) > epsilon {
+        coeffs.colors[colorID] = value
+      }
+    }
+
+    let upperBound = LP.Vector.from(bitmaps: combos).map { $0.dot(coeffs) }.max() ?? 0
+    return LP.Constraint(coeffs: coeffs, upperBound: upperBound)
+  }
+
 }
