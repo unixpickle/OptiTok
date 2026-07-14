@@ -1,6 +1,7 @@
+import Dispatch
 import SoPlex
 
-public protocol CutCallbacks {
+public protocol CutCallbacks: Sendable {
   func reportStage(cutName: String, stage: String)
   func reportProgress(cutName: String, stage: String, progress: Double)
   func reportError(cutName: String, error: Error)
@@ -19,7 +20,7 @@ public struct NopCallbacks: CutCallbacks {
   }
 }
 
-public struct CutCandidate: Codable {
+public struct CutCandidate: Codable, Sendable {
   public var constraint: LP.Constraint
   public var violation: Double
 }
@@ -317,7 +318,30 @@ private func findFractionalEdges(graph: Graph, solution: LP.Vector, epsilon: Dou
   }
 }
 
-public struct BruteForceWordGroup: CutAlgorithm {
+private final class CutResultCollector: @unchecked Sendable {
+  private let queue = DispatchQueue(label: "BruteForceWordGroup.results")
+  private var results = [CutCandidate]()
+
+  func append(_ candidate: CutCandidate) {
+    queue.sync {
+      results.append(candidate)
+    }
+  }
+
+  func reportError(callbacks: any CutCallbacks, cutName: String, error: Error) {
+    queue.sync {
+      callbacks.reportError(cutName: cutName, error: error)
+    }
+  }
+
+  func values() -> [CutCandidate] {
+    queue.sync {
+      results
+    }
+  }
+}
+
+public struct BruteForceWordGroup: CutAlgorithm, Sendable {
 
   public var epsilon: Double
   public var crossSize: Int
@@ -341,10 +365,12 @@ public struct BruteForceWordGroup: CutAlgorithm {
     solution: LP.Vector,
     callbacks: CutCallbacks
   ) -> [CutCandidate] {
-    var results = [CutCandidate]()
-    for wordIDs in wordSets(lp: lp, solution: solution) {
+    let wordSets = wordSets(lp: lp, solution: solution)
+    let results = CutResultCollector()
+    DispatchQueue.concurrentPerform(iterations: wordSets.count) { i in
+      let wordIDs = wordSets[i]
       guard let combinations = wordCross(lp: lp, solution: solution, words: wordIDs) else {
-        continue
+        return
       }
       do {
         let constraint = try findCut(combos: combinations, solution: solution)
@@ -353,10 +379,10 @@ public struct BruteForceWordGroup: CutAlgorithm {
           results.append(CutCandidate(constraint: constraint, violation: violation))
         }
       } catch {
-        callbacks.reportError(cutName: "BruteForceWordGroup", error: error)
+        results.reportError(callbacks: callbacks, cutName: "BruteForceWordGroup", error: error)
       }
     }
-    return results
+    return results.values()
   }
 
   public func wordSets(lp: LP, solution: LP.Vector) -> [[WordID]] {

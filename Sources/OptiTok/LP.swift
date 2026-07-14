@@ -1,7 +1,7 @@
 /// An LP is a linear program defined over a graph.
-public struct LP: Codable {
+public struct LP: Codable, Sendable {
 
-  public struct Vector: Codable {
+  public struct Vector: Codable, Sendable {
     public var edges: [EdgeID: Double]
     public var colors: [ColorID: Double]
 
@@ -47,7 +47,7 @@ public struct LP: Codable {
 
   // A Constraint is a single row of the linear program, defined as coefficients
   // over edge and color variables, as well as an upper bound for the combination.
-  public struct Constraint: Codable {
+  public struct Constraint: Codable, Sendable {
     public var coeffs: Vector
     public var upperBound: Double?
     public var lowerBound: Double?
@@ -85,7 +85,7 @@ public struct LP: Codable {
   }
 
   // Limit determines how to limit the vocabulary.
-  public enum Limit: Codable {
+  public enum Limit: Codable, Sendable {
     case vocabSize(Int)
 
     public func constraints(graph: Graph) -> [Constraint] {

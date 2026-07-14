@@ -1,4 +1,4 @@
-public struct BitmapSet: Equatable {
+public struct BitmapSet: Equatable, Sendable {
   /// The edges in the set are always sorted.
   public let edges: [EdgeID]
 
@@ -163,7 +163,7 @@ public struct BitmapSet: Equatable {
 
 }
 
-public struct Bitmap: Hashable, CustomStringConvertible, Collection {
+public struct Bitmap: Hashable, CustomStringConvertible, Collection, Sendable {
 
   public typealias Index = Int
   public typealias Element = Bool

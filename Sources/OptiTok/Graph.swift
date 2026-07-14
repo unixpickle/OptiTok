@@ -2,16 +2,16 @@ public typealias WordID = Int
 public typealias EdgeID = Int
 public typealias ColorID = Int
 
-public struct Graph: Codable {
+public struct Graph: Codable, Sendable {
 
-  public struct Edge: Hashable, Codable {
+  public struct Edge: Hashable, Codable, Sendable {
     public let word: WordID
     public let start: Int
     public let length: Int
     public let color: ColorID
   }
 
-  public struct Word: Hashable, Codable {
+  public struct Word: Hashable, Codable, Sendable {
     public let bytes: [UInt8]
     public let weight: Double
   }
