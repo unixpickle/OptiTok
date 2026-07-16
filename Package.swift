@@ -88,6 +88,15 @@ let package = Package(
             swiftSettings: [
                 .unsafeFlags(["-Xcc", "-I\(soPlexInclude)"])
             ]),
+        .executableTarget(
+            name: "InspectCuts",
+            dependencies: [
+                "OptiTok",
+                .product(name: "ArgumentParser", package: "swift-argument-parser"),
+            ],
+            swiftSettings: [
+                .unsafeFlags(["-Xcc", "-I\(soPlexInclude)"])
+            ]),
         .testTarget(
             name: "OptiTokTests",
             dependencies: ["OptiTok", "SoPlex"],
