@@ -141,6 +141,25 @@ public struct BitmapSet: Equatable, Sendable {
     return sourceIndices
   }
 
+  public func adding(
+    edges newEdges: some Sequence<EdgeID>,
+    colors newColors: some Sequence<ColorID>
+  ) -> BitmapSet {
+    let newEdges = Set(edges).union(newEdges).sorted()
+    let newColors = Set(colors).union(newColors).sorted()
+    var result = BitmapSet(edges: newEdges, colors: newColors)
+    let sourceIndices = result.map(subEdges: edges, subColors: colors)
+    result.bitmaps = Set(
+      bitmaps.map { bitmap in
+        var newBitmap = Bitmap(count: result.bitCount)
+        for (i, j) in sourceIndices.enumerated() {
+          newBitmap[j] = bitmap[i]
+        }
+        return newBitmap
+      })
+    return result
+  }
+
   /// Create a new set by augmenting every bitmap with additional color combinations.
   /// In particular, if a bitmap has false colors, we will cross this bitmap with every
   /// possible bitset of these colors.
@@ -200,6 +219,11 @@ public struct Bitmap: Hashable, CustomStringConvertible, Collection, Sendable {
     for (i, x) in bits.enumerated() {
       self[i] = x
     }
+  }
+
+  public init(count: Int, pattern: UInt64) {
+    self.count = count
+    self.pattern = [pattern]
   }
 
   public func index(after i: Int) -> Int {

@@ -1,7 +1,7 @@
 import Foundation
+import SoPlex
 import Testing
 
-import SoPlex
 @testable import OptiTok
 
 @Test func testGraphColorOccurrencesAreWeighted() async throws {

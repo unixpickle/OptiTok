@@ -1,4 +1,5 @@
 import Dispatch
+import Foundation
 import SoPlex
 
 public protocol CutCallbacks: Sendable {
@@ -373,7 +374,7 @@ public struct BruteForceWordGroup: CutAlgorithm, Sendable {
         return
       }
       do {
-        let constraint = try findCut(combos: combinations, solution: solution)
+        let constraint = try findMaximalCut(combos: combinations, solution: solution)
         let violation = constraint.violation(solution: solution)
         if violation > epsilon {
           results.append(CutCandidate(constraint: constraint, violation: violation))
@@ -476,83 +477,388 @@ public struct BruteForceWordGroup: CutAlgorithm, Sendable {
     return result
   }
 
-  public func findCut(combos: BitmapSet, solution: LP.Vector) throws -> LP.Constraint {
-    // We have a pos and neg variable for each bit, plus a final bias
-    var varToObj = [Double](repeating: 0, count: combos.bitCount * 2 + 2)
-    for (edgeID, bitIdx) in combos.edgeToIdx {
-      varToObj[bitIdx * 2] = -solution.edges[edgeID, default: 0]
-      varToObj[bitIdx * 2 + 1] = solution.edges[edgeID, default: 0]
+}
+
+public struct BruteForceCliqueGroup: CutAlgorithm, Sendable {
+
+  private final class CliqueGroupCollector: @unchecked Sendable {
+    private let lock = NSLock()
+    private let targetCount: Int
+    private var seen = Set<Set<Int>>()
+    private var result = [[Set<EdgeID>]]()
+
+    init(targetCount: Int) {
+      self.targetCount = targetCount
     }
-    for (colorID, bitIdx) in combos.colorToIdx {
-      varToObj[bitIdx * 2] = -solution.colors[colorID, default: 0]
-      varToObj[bitIdx * 2 + 1] = solution.colors[colorID, default: 0]
+
+    func shouldStartIteration() -> Bool {
+      lock.lock()
+      defer { lock.unlock() }
+      return result.count < targetCount
     }
-    varToObj[varToObj.count - 2] = -1
-    varToObj[varToObj.count - 1] = 1
 
-    let columns = varToObj.enumerated().map { (i, obj) in
-      SparseSoPlexSolver.Column(objective: obj, lowerBound: 0)
-    }
-    let lp = try SparseSoPlexSolver(columns: columns)
-
-    // Add L1 constraint to optimal cut coefficients
-    try lp.add(
-      row: .init(
-        entries: (0..<(varToObj.count - 2)).map { i in
-          .init(column: i, value: 1)
-        },
-        lowerBound: nil,
-        upperBound: 1
-      )
-    )
-
-    // We split the bias into positive/negative because SoPlex doesn't support
-    // unbounded variables, but now there's an unbounded direction for the LP,
-    // so we will constrain the bias to a large but finite L1 norm.
-    try lp.add(
-      row: .init(
-        entries: [
-          .init(column: varToObj.count - 2, value: 1),
-          .init(column: varToObj.count - 1, value: 1),
-        ],
-        lowerBound: nil,
-        upperBound: Double(varToObj.count * 2),
-      )
-    )
-
-    // Note that these coefficients are negative of the above, since the
-    // objective is minimization but these are upper bound constraints.
-    for bmp in combos.bitmaps {
-      var entries = [SparseSoPlexSolver.RowEntry]()
-      for (i, bit) in bmp.enumerated() {
-        if bit {
-          entries.append(.init(column: i * 2, value: 1))
-          entries.append(.init(column: i * 2 + 1, value: -1))
-        }
+    func append(group: Set<Int>, cliques: [Set<EdgeID>]) {
+      lock.lock()
+      defer { lock.unlock() }
+      if result.count >= targetCount {
+        return
       }
-      entries.append(.init(column: varToObj.count - 2, value: 1))
-      entries.append(.init(column: varToObj.count - 1, value: -1))
-      try lp.add(row: .init(entries: entries, lowerBound: nil, upperBound: 0))
-    }
-
-    let solution = try lp.solve()
-
-    var coeffs = LP.Vector.empty
-    for (edgeID, bitIdx) in combos.edgeToIdx {
-      let value = solution[bitIdx * 2] - solution[bitIdx * 2 + 1]
-      if abs(value) > epsilon {
-        coeffs.edges[edgeID] = value
-      }
-    }
-    for (colorID, bitIdx) in combos.colorToIdx {
-      let value = solution[bitIdx * 2] - solution[bitIdx * 2 + 1]
-      if abs(value) > epsilon {
-        coeffs.colors[colorID] = value
+      if seen.insert(group).inserted {
+        result.append(group.map { cliques[$0] })
       }
     }
 
-    let upperBound = LP.Vector.from(bitmaps: combos).map { $0.dot(coeffs) }.max() ?? 0
-    return LP.Constraint(coeffs: coeffs, upperBound: upperBound)
+    func values() -> [[Set<EdgeID>]] {
+      lock.lock()
+      defer { lock.unlock() }
+      return result
+    }
   }
 
+  /// A weighting function for candidate cliques given an existing set of cliques.
+  /// The weight takes the number of colors that a new clique has in common with
+  /// the existing cliques and returns a probability weight for being chosen.
+  public enum WeightFunc: Sendable {
+    case exponential(Double)
+    case linear
+
+    public func candidateWeight(commonColorCount: Int) -> Double {
+      switch self {
+      case .exponential(let base): pow(base, Double(commonColorCount))
+      case .linear: Double(commonColorCount)
+      }
+    }
+  }
+
+  public var epsilon: Double
+  public var minCrossSize: Int
+  public var maxCrossSize: Int
+  public var maxSharedColors: Int
+  public var maxConstraints: Int
+  public var candidateCount: Int
+  public var weightFunc: WeightFunc
+
+  public init(
+    epsilon: Double = 1e-4,
+    minCrossSize: Int = 2,
+    maxCrossSize: Int = 4,
+    maxSharedColors: Int = 8,
+    maxConstraints: Int = 10000,
+    candidateCount: Int = 10000,
+    weightFunc: WeightFunc = .exponential(4)
+  ) {
+    self.epsilon = epsilon
+    self.minCrossSize = minCrossSize
+    self.maxCrossSize = maxCrossSize
+    self.maxSharedColors = maxSharedColors
+    self.maxConstraints = maxConstraints
+    self.candidateCount = candidateCount
+    self.weightFunc = weightFunc
+  }
+
+  public func findCuts(
+    lp: LP,
+    solution: LP.Vector,
+    callbacks: CutCallbacks
+  ) -> [CutCandidate] {
+    let groups = cliqueGroups(lp: lp, solution: solution)
+    let results = CutResultCollector()
+    DispatchQueue.concurrentPerform(iterations: groups.count) { i in
+      guard let combinations = bitmapFor(lp: lp, cliques: groups[i]) else {
+        return
+      }
+      do {
+        let constraint = try findMaximalCut(combos: combinations, solution: solution)
+        let violation = constraint.violation(solution: solution)
+        if violation > epsilon {
+          results.append(CutCandidate(constraint: constraint, violation: violation))
+        }
+      } catch {
+        results.reportError(callbacks: callbacks, cutName: "BruteForceCliqueGroup", error: error)
+      }
+    }
+    return results.values()
+  }
+
+  private func weight(commonColors: Int) -> Double {
+    weightFunc.candidateWeight(commonColorCount: commonColors)
+  }
+
+  public func bitmapFor(lp: LP, cliques: [Set<EdgeID>]) -> BitmapSet? {
+    var colorCount = [ColorID: Int]()
+    for clique in cliques {
+      for edge in clique {
+        colorCount[lp.graph.edges[edge].color, default: 0] += 1
+      }
+    }
+    let allColors: [ColorID] = colorCount.compactMap { $0.value > 1 ? $0.key : nil }
+    precondition(allColors.count < 48, "too many color combinations to enumerate in memory")
+
+    // Start with every possible combination of colors
+    let colorBitmap = BitmapSet(
+      edges: [],
+      colors: allColors.sorted(),
+      bitmaps: Set(
+        (0..<(1 << allColors.count)).map { i in
+          Bitmap(count: allColors.count, pattern: UInt64(i))
+        })
+    )
+
+    // For each clique, compute an exhaustive set of combinations, given that a clique
+    // can only have one active edge in a valid ILP solution.
+    let perClique: [BitmapSet] = cliques.map { clique in
+      let allowedEdges = clique.filter { allColors.contains(lp.graph.edges[$0].color) }
+      precondition(
+        !allowedEdges.isEmpty, "clique can only be added if it shares at least one color")
+      let withEdges = colorBitmap.adding(edges: allowedEdges, colors: [])
+
+      // Note that the permutation set for this clique includes the case where
+      // no clique edge is active, which *may* be possible in a valid tokenization,
+      // but is not strictly guaranteed. If it's not possible, then we will simply have
+      // some extra ILP-based constraints that potentially hide a valid cut.
+      var newSet = withEdges
+
+      for edge in allowedEdges {
+        let color = lp.graph.edges[edge].color
+        let colorIdx = withEdges.colorToIdx[color]!
+        let edgeIdx = withEdges.edgeToIdx[edge]!
+        newSet.bitmaps.formUnion(
+          withEdges.bitmaps.compactMap { bitmap in
+            if bitmap[colorIdx] {
+              var newBmp = bitmap
+              newBmp[edgeIdx] = true
+              return newBmp
+            }
+            return nil
+          })
+      }
+      return newSet
+    }
+
+    var result = perClique[0]
+    for bmp in perClique[1...] {
+      guard let next = bmp.cross(result, limit: maxConstraints) else {
+        return nil
+      }
+      result = next
+    }
+    return result
+  }
+
+  public func cliqueGroups(lp: LP, solution: LP.Vector) -> [[Set<EdgeID>]] {
+    typealias CliqueID = Int
+    let cliques = fractionalCliques(lp: lp, solution: solution)
+    if cliques.count < minCrossSize {
+      return []
+    }
+    let cliqueColors = cliques.map { edgeIDs in
+      Set(edgeIDs.map { lp.graph.edges[$0].color })
+    }
+
+    let colorToCliques: [ColorID: Set<CliqueID>] = {
+      var result = [ColorID: Set<CliqueID>]()
+      for (cliqueID, colors) in cliqueColors.enumerated() {
+        for colorID in colors {
+          result[colorID, default: []].insert(cliqueID)
+        }
+      }
+      return result
+    }()
+
+    let result = CliqueGroupCollector(targetCount: candidateCount)
+    DispatchQueue.concurrentPerform(iterations: candidateCount * 4) { _ in
+      if !result.shouldStartIteration() {
+        return
+      }
+
+      // State that gets updated as we add more cliques
+      var group: Set<CliqueID> = []
+      var edges: Set<EdgeID> = []
+      var colors: Set<ColorID> = []
+      var commonCount = [CliqueID: Int]()
+
+      func countIntersection<T: Hashable & Sendable>(_ s1: Set<T>, _ s2: Set<T>) -> Int {
+        s1.count(where: s2.contains)
+      }
+
+      func addClique(_ sample: CliqueID) {
+        let addColors = cliqueColors[sample]
+        let newColors = addColors.filter { !colors.contains($0) }
+        colors.formUnion(addColors)
+        edges.formUnion(cliques[sample])
+        group.insert(sample)
+
+        for color in newColors {
+          for cliqueID in colorToCliques[color]! {
+            commonCount[cliqueID, default: 0] += 1
+          }
+        }
+
+        commonCount = commonCount.filter { (cliqueID, _) in
+          // Do not allow too many common edges
+          if countIntersection(edges, cliques[cliqueID]) > 0 {
+            return false
+          }
+
+          // Limit the total colors
+          let extraColors = cliqueColors[cliqueID]
+          let redundantCount = countIntersection(extraColors, colors)
+          let newCount = extraColors.count - redundantCount
+          if colors.count + newCount > maxSharedColors {
+            return false
+          }
+
+          return true
+        }
+      }
+
+      func sampleClique() -> CliqueID? {
+        let scoreMap = commonCount.map { (k, v) in (k, weight(commonColors: v)) }
+
+        let total = scoreMap.map { $0.1 }.reduce(0, +)
+        if total == 0 {
+          return nil
+        }
+        var value = Double.random(in: 0.0..<total)
+        for (i, x) in scoreMap {
+          if x == 0 {
+            // If we literally sample value == 0, we don't want to pick the first item.
+            continue
+          }
+          value -= x
+          if value <= 0 {
+            return i
+          }
+        }
+        // Edge case for numeric imprecision
+        return nil
+      }
+
+      addClique(cliques.indices.randomElement()!)
+      for _ in 1..<maxCrossSize {
+        guard let sample = sampleClique() else {
+          break
+        }
+        addClique(sample)
+      }
+      if group.count < minCrossSize {
+        return
+      }
+      result.append(group: group, cliques: cliques)
+    }
+
+    return result.values()
+  }
+
+  public func fractionalCliques(lp: LP, solution: LP.Vector) -> [Set<EdgeID>] {
+    func isFracEdge(_ edgeID: EdgeID) -> Bool {
+      let value = solution.edges[edgeID, default: 0]
+      return value > epsilon && value < 1 - epsilon
+    }
+    var result = [Set<EdgeID>]()
+    for wordID in lp.graph.words.indices {
+      var endToEdge = [Int: Set<EdgeID>]()
+      var startToEdge = [Int: Set<EdgeID>]()
+      for edgeID in lp.graph.wordToEdges[wordID] {
+        if !isFracEdge(edgeID) {
+          continue
+        }
+        let edge = lp.graph.edges[edgeID]
+        startToEdge[edge.start, default: .init()].insert(edgeID)
+        endToEdge[edge.start + edge.length, default: .init()].insert(edgeID)
+      }
+      if startToEdge.isEmpty {
+        continue
+      }
+      var curClique = Set<EdgeID>()
+      for idx in 0...startToEdge.keys.max()! {
+        curClique.subtract(endToEdge[idx, default: .init()])
+        if let newEdges = startToEdge[idx] {
+          curClique.formUnion(newEdges)
+          result.append(curClique)
+        }
+      }
+    }
+    return result
+  }
+
+}
+
+private func findMaximalCut(combos: BitmapSet, solution: LP.Vector) throws -> LP.Constraint {
+  // We have a pos and neg variable for each bit, plus a final bias
+  var varToObj = [Double](repeating: 0, count: combos.bitCount * 2 + 2)
+  for (edgeID, bitIdx) in combos.edgeToIdx {
+    varToObj[bitIdx * 2] = -solution.edges[edgeID, default: 0]
+    varToObj[bitIdx * 2 + 1] = solution.edges[edgeID, default: 0]
+  }
+  for (colorID, bitIdx) in combos.colorToIdx {
+    varToObj[bitIdx * 2] = -solution.colors[colorID, default: 0]
+    varToObj[bitIdx * 2 + 1] = solution.colors[colorID, default: 0]
+  }
+  varToObj[varToObj.count - 2] = -1
+  varToObj[varToObj.count - 1] = 1
+
+  let columns = varToObj.enumerated().map { (i, obj) in
+    SparseSoPlexSolver.Column(objective: obj, lowerBound: 0)
+  }
+  let lp = try SparseSoPlexSolver(columns: columns)
+
+  // Add L1 constraint to optimal cut coefficients
+  try lp.add(
+    row: .init(
+      entries: (0..<(varToObj.count - 2)).map { i in
+        .init(column: i, value: 1)
+      },
+      lowerBound: nil,
+      upperBound: 1
+    )
+  )
+
+  // We split the bias into positive/negative because SoPlex doesn't support
+  // unbounded variables, but now there's an unbounded direction for the LP,
+  // so we will constrain the bias to a large but finite L1 norm.
+  try lp.add(
+    row: .init(
+      entries: [
+        .init(column: varToObj.count - 2, value: 1),
+        .init(column: varToObj.count - 1, value: 1),
+      ],
+      lowerBound: nil,
+      upperBound: Double(varToObj.count * 2),
+    )
+  )
+
+  // Note that these coefficients are negative of the above, since the
+  // objective is minimization but these are upper bound constraints.
+  for bmp in combos.bitmaps {
+    var entries = [SparseSoPlexSolver.RowEntry]()
+    for (i, bit) in bmp.enumerated() {
+      if bit {
+        entries.append(.init(column: i * 2, value: 1))
+        entries.append(.init(column: i * 2 + 1, value: -1))
+      }
+    }
+    entries.append(.init(column: varToObj.count - 2, value: 1))
+    entries.append(.init(column: varToObj.count - 1, value: -1))
+    try lp.add(row: .init(entries: entries, lowerBound: nil, upperBound: 0))
+  }
+
+  let solution = try lp.solve()
+
+  var coeffs = LP.Vector.empty
+  for (edgeID, bitIdx) in combos.edgeToIdx {
+    let value = solution[bitIdx * 2] - solution[bitIdx * 2 + 1]
+    if abs(value) > 1e-5 {
+      coeffs.edges[edgeID] = value
+    }
+  }
+  for (colorID, bitIdx) in combos.colorToIdx {
+    let value = solution[bitIdx * 2] - solution[bitIdx * 2 + 1]
+    if abs(value) > 1e-5 {
+      coeffs.colors[colorID] = value
+    }
+  }
+
+  let upperBound = LP.Vector.from(bitmaps: combos).map { $0.dot(coeffs) }.max() ?? 0
+  return LP.Constraint(coeffs: coeffs, upperBound: upperBound)
 }

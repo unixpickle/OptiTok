@@ -92,6 +92,12 @@ struct SolveLoop: ParsableCommand {
   @Option(help: "Number of brute force triples to check.")
   var bruteForceTriples: Int = 0
 
+  @Option(help: "Number of clique constraint candidates to explore.")
+  var bruteForceCliques = 10000
+
+  @Option(help: "Clique constraint max group size.")
+  var bruteForceCliqueGroupSize = 5
+
   mutating func validate() throws {
     guard maxColorLen > 0 else {
       throw ValidationError("--max-color-len must be positive")
@@ -215,6 +221,19 @@ struct SolveLoop: ParsableCommand {
             epsilon: cutEpsilon,
             crossSize: 3,
             candidateCount: bruteForceTriples
+          )
+        ),
+        at: 0
+      )
+    }
+    if bruteForceCliques > 0 {
+      cutAlgs.insert(
+        (
+          "brute_force_cliques",
+          BruteForceCliqueGroup(
+            epsilon: cutEpsilon,
+            maxCrossSize: bruteForceCliqueGroupSize,
+            candidateCount: bruteForceCliques
           )
         ),
         at: 0

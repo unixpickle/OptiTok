@@ -190,7 +190,8 @@ public final class SparseSoPlexSolver {
     let status = CSoPlex_optimize(model)
     guard CSoPlex_isOptimalStatus(status) != 0 else {
       if status < 0 {
-        throw Error.soPlexError(operation: "optimize", status: Int(status), message: lastErrorMessage())
+        throw Error.soPlexError(
+          operation: "optimize", status: Int(status), message: lastErrorMessage())
       } else {
         throw Error.modelNotOptimal(status: Int(status), message: lastErrorMessage())
       }
@@ -239,7 +240,8 @@ public final class SparseSoPlexSolver {
       }
     }
     guard status == 0 else {
-      throw Error.soPlexError(operation: "get basis", status: Int(status), message: lastErrorMessage())
+      throw Error.soPlexError(
+        operation: "get basis", status: Int(status), message: lastErrorMessage())
     }
     return Basis(rows: rows, columns: columns)
   }
@@ -287,7 +289,8 @@ public final class SparseSoPlexSolver {
       }
     }
     guard status == 0 else {
-      throw Error.soPlexError(operation: "set basis", status: Int(status), message: lastErrorMessage())
+      throw Error.soPlexError(
+        operation: "set basis", status: Int(status), message: lastErrorMessage())
     }
   }
 

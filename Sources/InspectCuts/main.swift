@@ -39,6 +39,12 @@ struct InspectCuts: ParsableCommand {
   @Option(help: "Number of brute force triples to check.")
   var bruteForceTriples: Int = 10000
 
+  @Option(help: "Number of brute force clique groups to check.")
+  var bruteForceCliqueGroups: Int = 0
+
+  @Option(help: "Maximum clique group size.")
+  var maxCliqueGroupSize: Int = 4
+
   @Option(help: "Maximum bitmap constraints for each brute force candidate.")
   var maxConstraints: Int = 10000
 
@@ -50,23 +56,44 @@ struct InspectCuts: ParsableCommand {
     }
     print("Loaded existing train state from: \(url.path)")
 
-    let cutter = BruteForceWordGroup(
-      epsilon: cutEpsilon,
-      crossSize: 3,
-      maxConstraints: maxConstraints,
-      candidateCount: bruteForceTriples
-    )
+    var cutters = [(String, CutAlgorithm)]()
+    if bruteForceTriples > 0 {
+      cutters.append(
+        (
+          "brute_force_triples",
+          BruteForceWordGroup(
+            epsilon: cutEpsilon,
+            crossSize: 3,
+            maxConstraints: maxConstraints,
+            candidateCount: bruteForceTriples
+          )
+        ))
+    }
+    if bruteForceCliqueGroups > 0 {
+      cutters.append(
+        (
+          "brute_force_clique_groups",
+          BruteForceCliqueGroup(
+            epsilon: cutEpsilon,
+            maxCrossSize: maxCliqueGroupSize,
+            maxConstraints: maxConstraints,
+            candidateCount: bruteForceCliqueGroups
+          )
+        ))
+    }
 
-    print("finding cuts...")
-    let cuts = cutter.findCuts(
-      lp: state.lp,
-      solution: solution,
-      callbacks: NopCallbacks()
-    ).sorted { $0.violation > $1.violation }
+    for (algName, cutter) in cutters {
+      print("finding cuts for algorithm \(algName)...")
+      let cuts = cutter.findCuts(
+        lp: state.lp,
+        solution: solution,
+        callbacks: NopCallbacks()
+      ).sorted { $0.violation > $1.violation }
 
-    for (index, cut) in cuts.enumerated() {
-      print()
-      printCut(cut, index: index, lp: state.lp, solution: solution)
+      for (index, cut) in cuts.enumerated() {
+        print()
+        printCut(cut, index: index, lp: state.lp, solution: solution)
+      }
     }
   }
 
@@ -160,7 +187,8 @@ struct InspectCuts: ParsableCommand {
   }
 
   private func integralDisplayScale(for constraint: LP.Constraint) -> Double {
-    let coefficients = Array(constraint.coeffs.edges.values) + Array(constraint.coeffs.colors.values)
+    let coefficients =
+      Array(constraint.coeffs.edges.values) + Array(constraint.coeffs.colors.values)
     let absCoefficients = coefficients.map(abs).filter { $0 > 0 }
     guard let unit = absCoefficients.min(), unit.isFinite, unit > 0 else {
       return 1
@@ -171,10 +199,11 @@ struct InspectCuts: ParsableCommand {
       return 1
     }
 
-    let maxError = absCoefficients.map { value in
-      let scaled = value * scale
-      return abs(scaled - scaled.rounded())
-    }.max() ?? 0
+    let maxError =
+      absCoefficients.map { value in
+        let scaled = value * scale
+        return abs(scaled - scaled.rounded())
+      }.max() ?? 0
     return maxError < 1e-5 ? scale : 1
   }
 
