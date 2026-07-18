@@ -68,6 +68,11 @@ struct SolveLoop: ParsableCommand {
   @Option(help: "Epsilon for fractionality.")
   var fractionalEpsilon = 1e-4
 
+  @Option(
+    help: "Force this many lowest fractional colors to zero via new constraints at every step."
+  )
+  var forceZeroCount = 0
+
   @Option(help: "3-cycle template edge pairs retained per conflicting color pair.")
   var cycle3PairsPerColorPair = 2
 
@@ -265,8 +270,12 @@ struct SolveLoop: ParsableCommand {
         state.nextStep = .roundTokenizer
         try save()
         let check = solver.lp.check(solution: solution)
+        let fractionalColorCount = solution.colors.values.count {
+          $0 > fractionalEpsilon && $0 < 1 - fractionalEpsilon
+        }
         print(
-          " => round \(state.round): lower_bound=\(check.objective) max_violation=\(check.maxViolation)"
+          " => round \(state.round): lower_bound=\(check.objective) "
+            + "max_violation=\(check.maxViolation) fractional_colors=\(fractionalColorCount)"
         )
       case .roundTokenizer:
         print("round \(state.round): counting rounded tokens...")
@@ -284,6 +293,22 @@ struct SolveLoop: ParsableCommand {
           } else {
             .findCuts
           }
+
+        if forceZeroCount > 0 {
+          let nonzeroColors = state.lastSolution!.colors.filter { $0.value > fractionalEpsilon }
+            .sorted { $0.value < $1.value }
+          let clipCount = min(forceZeroCount, max(0, nonzeroColors.count - vocabSize))
+          if clipCount > 0 {
+            print(" => forcing \(clipCount) fractional colors to zero for future rounds")
+          }
+          for i in 0..<clipCount {
+            // Add a constraint forcing this color to zero.
+            var vec = LP.Vector.empty
+            vec.colors[nonzeroColors[i].key] = 1
+            try solver.add(constraint: .init(coeffs: vec, lowerBound: 0, upperBound: 0))
+          }
+        }
+
         try save()
         let tokCount = state.corpus.map { tok.encode(word: $0).count }.reduce(0, +)
         print(" => round \(state.round): rounded_tokens=\(tokCount)")
@@ -292,11 +317,11 @@ struct SolveLoop: ParsableCommand {
         var allCuts = [CutCandidate]()
         for (algName, alg) in cutAlgs {
           print(" => working on cut algorithm: \(algName)")
-          allCuts.append(
-            contentsOf: alg.findCuts(
-              lp: solver.lp, solution: state.lastSolution!, callbacks: NopCallbacks()
-            )
+          let found = alg.findCuts(
+            lp: solver.lp, solution: state.lastSolution!, callbacks: NopCallbacks()
           )
+          allCuts.append(contentsOf: found)
+          print(" => cut algorithm \(algName) found \(found.count) cuts")
         }
 
         allCuts.sort { $0.violation > $1.violation }
